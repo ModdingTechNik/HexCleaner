@@ -2,5 +2,26 @@
 name = "HexCleaner"
 version = "0.1.0"
 edition = "2024"
+description = "Очистка мусорных файлов и кэшей Windows"
 
 [dependencies]
+eframe = "0.37"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+chrono = "0.4"
+glob = "0.3"
+winreg = "0.56"
+windows = { version = "0.62", features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_System_Threading",
+    "Win32_System_ProcessStatus",
+    "Win32_System_EventLog",
+    "Win32_System_Services",
+    "Win32_UI_Shell",
+    "Win32_UI_WindowsAndMessaging",
+] }
+
+[profile.release]
+lto = true
+strip = true
