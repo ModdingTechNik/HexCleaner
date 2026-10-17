@@ -10,7 +10,7 @@ use eframe::egui::{
 };
 
 use crate::catalog::{self, CleanupTask};
-use crate::cleaner::{self, CleanupEvent, CleanupJob, TaskReport, format_size};
+use crate::cleaner::{self, CleanupEvent, CleanupJob, CleanupOptions, TaskReport, format_size};
 use crate::settings::Settings;
 use crate::system::admin;
 use crate::widgets::{shield_atom, shield_icon};
@@ -84,7 +84,9 @@ impl HexCleanerApp {
 
         self.task_states.fill(TaskState::Idle);
         self.status = Status::Running;
-        self.job = Some(CleanupJob::start(Arc::clone(&self.tasks), selected, self.is_admin));
+        let options =
+            CleanupOptions { is_admin: self.is_admin, compress_old_logs: self.settings.compress_old_logs };
+        self.job = Some(CleanupJob::start(Arc::clone(&self.tasks), selected, options));
     }
 
     fn restart_as_admin(&mut self, ctx: &egui::Context) {
@@ -263,6 +265,15 @@ impl HexCleanerApp {
                 let dir = cleaner::logs_directory();
                 let _ = std::fs::create_dir_all(&dir);
                 open_in_explorer(&dir);
+            }
+
+            let enabled = !self.is_running();
+            let compress = Checkbox::new(&mut self.settings.compress_old_logs, "Сжимать прошлые журналы");
+            let response = ui
+                .add_enabled(enabled, compress)
+                .on_hover_text("Перед новой очисткой упаковывать журналы прошлых очисток в zip-архивы.");
+            if response.changed() {
+                self.settings.save();
             }
         });
 

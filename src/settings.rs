@@ -10,11 +10,19 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
-#[derive(Default, Serialize, Deserialize)]
+#[derive(Serialize, Deserialize)]
+#[serde(default)]
 pub struct Settings {
     /// Отмечен ли пункт (ключ — `CleanupTask::id`). Пункты, которых здесь нет, отмечены.
-    #[serde(default)]
     selected: BTreeMap<String, bool>,
+    /// Сжимать ли журналы прошлых очисток в zip-архивы.
+    pub compress_old_logs: bool,
+}
+
+impl Default for Settings {
+    fn default() -> Self {
+        Self { selected: BTreeMap::new(), compress_old_logs: true }
+    }
 }
 
 impl Settings {

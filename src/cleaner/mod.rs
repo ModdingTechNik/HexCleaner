@@ -39,6 +39,15 @@ pub enum CleanupEvent {
     Failed(String),
 }
 
+/// Параметры запуска очистки.
+#[derive(Clone, Copy)]
+pub struct CleanupOptions {
+    /// Есть ли у программы права администратора. Без них пункты, требующие этих прав, пропускаются.
+    pub is_admin: bool,
+    /// Сжать журналы прошлых очисток в zip-архивы перед созданием нового журнала.
+    pub compress_old_logs: bool,
+}
+
 /// Запущенная очистка.
 pub struct CleanupJob {
     events: Receiver<CleanupEvent>,
@@ -48,13 +57,12 @@ pub struct CleanupJob {
 
 impl CleanupJob {
     /// Запускает очистку выбранных пунктов (`selected` — индексы в `tasks`).
-    /// Пункты, требующие прав администратора, без этих прав пропускаются.
-    pub fn start(tasks: Arc<Vec<CleanupTask>>, selected: Vec<usize>, is_admin: bool) -> Self {
+    pub fn start(tasks: Arc<Vec<CleanupTask>>, selected: Vec<usize>, options: CleanupOptions) -> Self {
         let (sender, events) = mpsc::channel();
         let cancel = Arc::new(AtomicBool::new(false));
 
         let cancel_flag = Arc::clone(&cancel);
-        let worker = thread::spawn(move || run_cleanup(&tasks, &selected, is_admin, &sender, &cancel_flag));
+        let worker = thread::spawn(move || run_cleanup(&tasks, &selected, options, &sender, &cancel_flag));
 
         Self { events, cancel, worker: Some(worker) }
     }
@@ -84,11 +92,12 @@ impl Drop for CleanupJob {
 fn run_cleanup(
     tasks: &[CleanupTask],
     selected: &[usize],
-    is_admin: bool,
+    options: CleanupOptions,
     events: &Sender<CleanupEvent>,
     cancel: &AtomicBool,
 ) {
-    let mut log = match CleanupLog::create() {
+    let is_admin = options.is_admin;
+    let mut log = match CleanupLog::create(options.compress_old_logs) {
         Ok(log) => log,
         Err(error) => {
             let _ = events.send(CleanupEvent::Failed(format!("Не удалось создать журнал очистки: {error}")));
