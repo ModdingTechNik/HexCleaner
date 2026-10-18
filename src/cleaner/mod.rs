@@ -3,6 +3,9 @@
 //! Очистка выполняется в отдельном потоке, чтобы не подвешивать интерфейс.
 //! Поток сообщает о ходе работы через канал событий [`CleanupEvent`],
 //! а интерфейс может попросить его остановиться через [`CleanupJob::cancel`].
+//!
+//! Тот же движок выполняет и предварительный анализ ([`Mode::Analyze`]): обходит те же
+//! папки по тем же правилам, но ничего не удаляет и не меняет, а только считает.
 
 mod failure;
 mod files;
@@ -23,7 +26,7 @@ use crate::system::{event_log, memory, services};
 
 pub use log::logs_directory;
 use log::CleanupLog;
-pub use report::{TaskReport, format_size};
+pub use report::{Location, TaskReport, TaskResult, format_size};
 
 /// Как часто отправлять в интерфейс промежуточные счётчики.
 const PROGRESS_INTERVAL: Duration = Duration::from_millis(100);
@@ -33,7 +36,7 @@ pub enum CleanupEvent {
     TaskStarted(usize),
     /// Промежуточные счётчики выполняющегося пункта.
     Progress(usize, TaskReport),
-    TaskFinished(usize, TaskReport),
+    TaskFinished(usize, TaskResult),
     /// Пункт пропущен, потому что у программы нет прав администратора.
     TaskSkipped(usize),
     Finished { total: TaskReport, log_path: PathBuf, cancelled: bool },
@@ -41,9 +44,19 @@ pub enum CleanupEvent {
     Failed(String),
 }
 
+/// Что делать с найденным мусором.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Mode {
+    /// Удалить.
+    Clean,
+    /// Только посчитать, сколько и где мусора. Ничего не удаляется и не меняется.
+    Analyze,
+}
+
 /// Параметры запуска очистки.
 #[derive(Clone, Copy)]
 pub struct CleanupOptions {
+    pub mode: Mode,
     /// Есть ли у программы права администратора. Без них пункты, требующие этих прав, пропускаются.
     pub is_admin: bool,
     /// Сжать журналы прошлых очисток в zip-архивы перед созданием нового журнала.
@@ -99,10 +112,10 @@ fn run_cleanup(
     cancel: &AtomicBool,
 ) {
     let is_admin = options.is_admin;
-    let mut log = match CleanupLog::create(options.compress_old_logs) {
+    let mut log = match CleanupLog::create(options.mode, options.compress_old_logs) {
         Ok(log) => log,
         Err(error) => {
-            let _ = events.send(CleanupEvent::Failed(format!("Не удалось создать журнал очистки: {error}")));
+            let _ = events.send(CleanupEvent::Failed(format!("Не удалось создать журнал: {error}")));
             return;
         }
     };
@@ -127,13 +140,13 @@ fn run_cleanup(
         }
 
         let _ = events.send(CleanupEvent::TaskStarted(index));
-        let mut run = TaskRun::new(index, &mut log, events, cancel);
+        let mut run = TaskRun::new(index, options.mode, &mut log, events, cancel);
         run.execute(task);
-        let report = run.report;
+        let result = run.into_result();
 
-        log.task_finished(&report);
-        total += report;
-        let _ = events.send(CleanupEvent::TaskFinished(index, report));
+        log.task_finished(&result);
+        total += result.report;
+        let _ = events.send(CleanupEvent::TaskFinished(index, result));
     }
 
     let cancelled = cancel.load(Ordering::Relaxed);
@@ -144,7 +157,12 @@ fn run_cleanup(
 /// Выполнение одного пункта: счётчики, журнал и флаг отмены в одном месте.
 pub struct TaskRun<'a> {
     task_index: usize,
+    mode: Mode,
     report: TaskReport,
+    /// Разбивка по папкам; `current_location` — папка, которая обрабатывается сейчас.
+    locations: Vec<Location>,
+    current_location: Option<usize>,
+    note: Option<&'static str>,
     log: &'a mut CleanupLog,
     events: &'a Sender<CleanupEvent>,
     cancel: &'a AtomicBool,
@@ -156,13 +174,18 @@ pub struct TaskRun<'a> {
 impl<'a> TaskRun<'a> {
     fn new(
         task_index: usize,
+        mode: Mode,
         log: &'a mut CleanupLog,
         events: &'a Sender<CleanupEvent>,
         cancel: &'a AtomicBool,
     ) -> Self {
         Self {
             task_index,
+            mode,
             report: TaskReport::default(),
+            locations: Vec::new(),
+            current_location: None,
+            note: None,
             log,
             events,
             cancel,
@@ -172,7 +195,11 @@ impl<'a> TaskRun<'a> {
     }
 
     fn execute(&mut self, task: &CleanupTask) {
-        let stopped_services = self.stop_services(task.services_to_stop);
+        // При анализе службы не трогаем: файлы только читаются.
+        let stopped_services = match self.mode {
+            Mode::Clean => self.stop_services(task.services_to_stop),
+            Mode::Analyze => Vec::new(),
+        };
 
         for action in &task.actions {
             if self.is_cancelled() {
@@ -184,16 +211,26 @@ impl<'a> TaskRun<'a> {
         self.start_services(&stopped_services);
     }
 
+    /// Итог пункта: пустые папки отбрасываются, остальные сортируются по объёму.
+    fn into_result(self) -> TaskResult {
+        let mut locations = self.locations;
+        locations.retain(|location| location.files > 0 || location.bytes > 0);
+        locations.sort_by_key(|location| std::cmp::Reverse(location.bytes));
+        TaskResult { report: self.report, locations, note: self.note }
+    }
+
     fn execute_action(&mut self, action: &Action) {
         match action {
             Action::ClearDirectory { pattern, min_age } => {
                 for dir in self.safe_directories(pattern) {
+                    self.enter_location(&dir);
                     files::clear_directory(self, &dir, *min_age);
                 }
             }
             Action::DeleteDirectory { pattern } => {
                 for dir in self.safe_directories(pattern) {
                     if let Ok(metadata) = dir.symlink_metadata() {
+                        self.enter_location(&dir);
                         files::delete_directory(self, &dir, &metadata);
                     }
                 }
@@ -202,6 +239,7 @@ impl<'a> TaskRun<'a> {
                 for path in paths::expand(pattern) {
                     let Ok(metadata) = path.symlink_metadata() else { continue };
                     if metadata.is_file() && !files::is_link(&metadata) {
+                        self.enter_location(path.parent().unwrap_or(&path));
                         files::delete_file(self, &path, &metadata);
                     }
                 }
@@ -233,6 +271,12 @@ impl<'a> TaskRun<'a> {
 
     fn clear_event_logs(&mut self) {
         let logs_dir = Path::new(&std::env::var("WINDIR").unwrap_or_default()).join(r"System32\winevt\Logs");
+        self.enter_location(&logs_dir);
+        if self.is_analysis() {
+            self.estimate_event_logs(&logs_dir);
+            return;
+        }
+
         let size_before = files::directory_size(&logs_dir);
 
         let mut cleared = 0;
@@ -250,13 +294,28 @@ impl<'a> TaskRun<'a> {
         }
 
         let size_after = files::directory_size(&logs_dir);
-        self.report.freed_bytes += size_before.saturating_sub(size_after);
+        self.add_freed_bytes(size_before.saturating_sub(size_after));
         self.log.line(&format!(
             "  журналов событий очищено: {cleared}, пропущено (активные или защищённые): {not_cleared}"
         ));
     }
 
+    /// Оценка для анализа: очищенный журнал событий ужимается до минимального размера
+    /// файла (68 КБ), всё сверх этого освободится.
+    fn estimate_event_logs(&mut self, logs_dir: &Path) {
+        const CLEARED_LOG_SIZE: u64 = 68 * 1024;
+        let reclaimable = files::file_sizes(logs_dir, "evtx")
+            .into_iter()
+            .map(|size| size.saturating_sub(CLEARED_LOG_SIZE))
+            .sum();
+        self.add_freed_bytes(reclaimable);
+    }
+
     fn trim_process_memory(&mut self) {
+        if self.is_analysis() {
+            self.note = Some("объём памяти известен только после очистки");
+            return;
+        }
         let result = memory::trim_all_working_sets();
         self.report.freed_memory += result.freed_bytes;
         self.log.line(&format!(
@@ -298,10 +357,40 @@ impl<'a> TaskRun<'a> {
         self.cancel.load(Ordering::Relaxed)
     }
 
-    fn file_deleted(&mut self, path: &Path, size: u64) {
+    fn is_analysis(&self) -> bool {
+        self.mode == Mode::Analyze
+    }
+
+    /// Дальнейшие файлы учитываются в разбивке по папкам под этой папкой.
+    fn enter_location(&mut self, path: &Path) {
+        let index = match self.locations.iter().position(|location| location.path == path) {
+            Some(index) => index,
+            None => {
+                self.locations.push(Location { path: path.to_owned(), files: 0, bytes: 0 });
+                self.locations.len() - 1
+            }
+        };
+        self.current_location = Some(index);
+    }
+
+    fn add_freed_bytes(&mut self, bytes: u64) {
+        self.report.freed_bytes += bytes;
+        if let Some(index) = self.current_location {
+            self.locations[index].bytes += bytes;
+        }
+    }
+
+    /// Учитывает файл: удалённый при очистке или найденный при анализе.
+    fn record_file(&mut self, path: &Path, size: u64) {
         self.report.deleted_files += 1;
-        self.report.freed_bytes += size;
-        self.log.deleted(path, size);
+        self.add_freed_bytes(size);
+        if let Some(index) = self.current_location {
+            self.locations[index].files += 1;
+        }
+        // При анализе по каждому файлу журнал не пишем — только итоги по папкам.
+        if !self.is_analysis() {
+            self.log.deleted(path, size);
+        }
 
         if self.last_progress.elapsed() >= PROGRESS_INTERVAL {
             self.last_progress = Instant::now();
@@ -347,7 +436,7 @@ mod tests {
         let (sender, _events) = mpsc::channel();
         let cancel = AtomicBool::new(false);
         let mut log = CleanupLog::for_tests(&root.join("logs"));
-        let mut run = TaskRun::new(0, &mut log, &sender, &cancel);
+        let mut run = TaskRun::new(0, Mode::Clean, &mut log, &sender, &cancel);
 
         files::clear_directory(&mut run, &junk, None);
 
@@ -359,6 +448,53 @@ mod tests {
 
         drop(log);
         let _ = fs::remove_dir(&link);
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// Анализ ничего не удаляет и не меняет, но находит ровно то, что потом удалит очистка,
+    /// с разбивкой по папкам.
+    #[test]
+    fn analysis_counts_without_deleting() {
+        let root = std::env::temp_dir().join(format!("hexcleaner_analysis_{}", std::process::id()));
+        let big = root.join("big_cache");
+        let small = root.join("small_cache");
+        fs::create_dir_all(big.join("nested")).unwrap();
+        fs::create_dir_all(&small).unwrap();
+        fs::write(big.join("a.bin"), vec![0u8; 3000]).unwrap();
+        fs::write(big.join(r"nested\b.bin"), vec![0u8; 1000]).unwrap();
+        fs::write(small.join("c.bin"), vec![0u8; 10]).unwrap();
+        let readonly = small.join("c.bin");
+        let mut permissions = fs::metadata(&readonly).unwrap().permissions();
+        permissions.set_readonly(true);
+        fs::set_permissions(&readonly, permissions).unwrap();
+
+        let action = Action::ClearDirectory { pattern: format!(r"{}\*_cache", root.display()), min_age: None };
+        let (sender, _events) = mpsc::channel();
+        let cancel = AtomicBool::new(false);
+        let mut log = CleanupLog::for_tests(&root.join("logs"));
+
+        let mut analysis = TaskRun::new(0, Mode::Analyze, &mut log, &sender, &cancel);
+        analysis.execute_action(&action);
+        let found = analysis.into_result();
+
+        assert_eq!(found.report.deleted_files, 3);
+        assert_eq!(found.report.freed_bytes, 4010);
+        assert!(big.join(r"nested\b.bin").exists(), "анализ удалил файл!");
+        assert!(fs::metadata(&readonly).unwrap().permissions().readonly(), "анализ изменил атрибуты!");
+        // Папки отсортированы по объёму: сначала самая большая.
+        let locations: Vec<_> = found.locations.iter().map(|l| (l.path.clone(), l.files, l.bytes)).collect();
+        assert_eq!(locations, vec![(big.clone(), 2, 4000), (small.clone(), 1, 10)]);
+
+        let mut cleanup = TaskRun::new(0, Mode::Clean, &mut log, &sender, &cancel);
+        cleanup.execute_action(&action);
+        let cleaned = cleanup.into_result();
+
+        assert_eq!(cleaned.report.deleted_files, found.report.deleted_files);
+        assert_eq!(cleaned.report.freed_bytes, found.report.freed_bytes);
+        assert!(!big.join("nested").exists());
+        assert!(!readonly.exists());
+
+        drop(log);
         let _ = fs::remove_dir_all(&root);
     }
 }

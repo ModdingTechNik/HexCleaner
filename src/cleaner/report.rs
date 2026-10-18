@@ -1,6 +1,24 @@
 //! Статистика очистки.
 
 use std::ops::AddAssign;
+use std::path::PathBuf;
+
+/// Сколько мусора найдено (или удалено) в одной папке.
+#[derive(Clone, Debug)]
+pub struct Location {
+    pub path: PathBuf,
+    pub files: u64,
+    pub bytes: u64,
+}
+
+/// Результат одного пункта: итоги и разбивка по папкам, самые большие — первыми.
+#[derive(Clone, Debug, Default)]
+pub struct TaskResult {
+    pub report: TaskReport,
+    pub locations: Vec<Location>,
+    /// Пояснение, если для пункта нельзя посчитать объём (например, очистка памяти при анализе).
+    pub note: Option<&'static str>,
+}
 
 /// Итоги выполнения одного пункта (или всей очистки целиком).
 #[derive(Clone, Copy, Debug, Default)]

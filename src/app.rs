@@ -5,26 +5,33 @@ use std::process::Command;
 use std::sync::Arc;
 use std::time::Duration;
 
+use eframe::egui::collapsing_header::CollapsingState;
 use eframe::egui::{
-    self, Align, Button, CentralPanel, Checkbox, Color32, Layout, Panel, RichText, ScrollArea, Ui, vec2,
+    self, Align, Button, CentralPanel, Checkbox, Color32, Grid, Layout, Panel, RichText, ScrollArea, Ui, vec2,
 };
 
 use crate::catalog::{self, CleanupTask};
-use crate::cleaner::{self, CleanupEvent, CleanupJob, CleanupOptions, TaskReport, format_size};
+use crate::cleaner::{
+    self, CleanupEvent, CleanupJob, CleanupOptions, Location, Mode, TaskReport, TaskResult, format_size,
+};
 use crate::settings::Settings;
 use crate::system::admin;
 use crate::widgets::{shield_atom, shield_icon};
 
 const ERROR_COLOR: Color32 = Color32::from_rgb(0xE5, 0x6B, 0x6B);
 const SUCCESS_COLOR: Color32 = Color32::from_rgb(0x7C, 0xC4, 0x7F);
+const FOUND_COLOR: Color32 = Color32::from_rgb(0xE8, 0xB9, 0x4A);
 
-/// Состояние пункта в текущей (или последней) очистке.
-#[derive(Clone, Copy)]
+/// Сколько папок показывать в разбивке пункта; полный список — в журнале.
+const MAX_SHOWN_LOCATIONS: usize = 15;
+
+/// Состояние пункта в текущем (или последнем) анализе или очистке.
+#[derive(Clone)]
 enum TaskState {
-    /// Очистка ещё не запускалась или пункт не выбран.
+    /// Ещё не запускался или пункт не выбран.
     Idle,
     Running(TaskReport),
-    Done(TaskReport),
+    Done(TaskResult),
     /// Пропущен из-за отсутствия прав администратора.
     Skipped,
 }
@@ -32,8 +39,8 @@ enum TaskState {
 /// Строка состояния внизу окна.
 enum Status {
     Ready,
-    Running,
-    Finished { total: TaskReport, cancelled: bool },
+    Running(Mode),
+    Finished { mode: Mode, total: TaskReport, cancelled: bool },
     Error(String),
 }
 
@@ -44,6 +51,8 @@ pub struct HexCleanerApp {
     /// Состояние каждого пункта; индексы совпадают с `tasks`.
     task_states: Vec<TaskState>,
     job: Option<CleanupJob>,
+    /// Режим текущего или последнего запуска: от него зависят подписи результатов.
+    mode: Mode,
     status: Status,
     last_log: Option<PathBuf>,
 }
@@ -60,6 +69,7 @@ impl HexCleanerApp {
             settings: Settings::load(),
             is_admin,
             job: None,
+            mode: Mode::Clean,
             status: Status::Ready,
             last_log: None,
         }
@@ -76,16 +86,21 @@ impl HexCleanerApp {
 
     // --- Действия ---
 
-    fn start_cleanup(&mut self) {
+    /// Запускает очистку или анализ отмеченных пунктов.
+    fn start(&mut self, mode: Mode) {
         // Передаём все отмеченные пункты: недоступные без прав движок пропустит и отметит в журнале.
         let selected: Vec<usize> = (0..self.tasks.len())
             .filter(|&index| self.settings.is_selected(self.tasks[index].id))
             .collect();
 
         self.task_states.fill(TaskState::Idle);
-        self.status = Status::Running;
-        let options =
-            CleanupOptions { is_admin: self.is_admin, compress_old_logs: self.settings.compress_old_logs };
+        self.mode = mode;
+        self.status = Status::Running(mode);
+        let options = CleanupOptions {
+            mode,
+            is_admin: self.is_admin,
+            compress_old_logs: self.settings.compress_old_logs,
+        };
         self.job = Some(CleanupJob::start(Arc::clone(&self.tasks), selected, options));
     }
 
@@ -117,10 +132,10 @@ impl HexCleanerApp {
             match event {
                 CleanupEvent::TaskStarted(index) => self.task_states[index] = TaskState::Running(TaskReport::default()),
                 CleanupEvent::Progress(index, report) => self.task_states[index] = TaskState::Running(report),
-                CleanupEvent::TaskFinished(index, report) => self.task_states[index] = TaskState::Done(report),
+                CleanupEvent::TaskFinished(index, result) => self.task_states[index] = TaskState::Done(result),
                 CleanupEvent::TaskSkipped(index) => self.task_states[index] = TaskState::Skipped,
                 CleanupEvent::Finished { total, log_path, cancelled } => {
-                    self.status = Status::Finished { total, cancelled };
+                    self.status = Status::Finished { mode: self.mode, total, cancelled };
                     self.last_log = Some(log_path);
                     finished = true;
                 }
@@ -143,8 +158,10 @@ impl HexCleanerApp {
     fn running_total(&self) -> TaskReport {
         let mut total = TaskReport::default();
         for state in &self.task_states {
-            if let TaskState::Running(report) | TaskState::Done(report) = state {
-                total += *report;
+            match state {
+                TaskState::Running(report) => total += *report,
+                TaskState::Done(result) => total += result.report,
+                TaskState::Idle | TaskState::Skipped => {}
             }
         }
         total
@@ -196,9 +213,32 @@ impl HexCleanerApp {
         let tasks = Arc::clone(&self.tasks);
         ScrollArea::vertical().auto_shrink(false).show(ui, |ui| {
             for (index, task) in tasks.iter().enumerate() {
-                ui.horizontal(|ui| self.task_row(ui, index, task));
+                self.task_entry(ui, index, task);
             }
         });
+    }
+
+    /// Пункт списка. Если для него известна разбивка по папкам, его можно развернуть.
+    fn task_entry(&mut self, ui: &mut Ui, index: usize, task: &CleanupTask) {
+        let has_locations =
+            matches!(&self.task_states[index], TaskState::Done(result) if !result.locations.is_empty());
+        if !has_locations {
+            ui.horizontal(|ui| {
+                // Отступ на месте треугольника, чтобы все пункты стояли ровно.
+                ui.add_space(ui.spacing().indent);
+                self.task_row(ui, index, task);
+            });
+            return;
+        }
+
+        let id = ui.make_persistent_id(("task_locations", task.id));
+        CollapsingState::load_with_default_open(ui.ctx(), id, false)
+            .show_header(ui, |ui| self.task_row(ui, index, task))
+            .body(|ui| {
+                if let TaskState::Done(result) = &self.task_states[index] {
+                    locations_grid(ui, task.id, &result.locations);
+                }
+            });
     }
 
     fn task_row(&mut self, ui: &mut Ui, index: usize, task: &CleanupTask) {
@@ -223,19 +263,35 @@ impl HexCleanerApp {
             self.settings.save();
         }
 
-        ui.with_layout(Layout::right_to_left(Align::Center), |ui| match self.task_states[index] {
+        let result_color = match self.mode {
+            Mode::Clean => SUCCESS_COLOR,
+            Mode::Analyze => FOUND_COLOR,
+        };
+        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+            // Отступ под полосу прокрутки, чтобы она не закрывала цифры.
+            ui.add_space(ui.spacing().scroll.bar_width + 4.0);
+            Self::task_state_label(ui, &self.task_states[index], result_color);
+        });
+    }
+
+    /// Итог пункта справа в строке: счётчики, пояснение или «пропущено».
+    fn task_state_label(ui: &mut Ui, state: &TaskState, result_color: Color32) {
+        match state {
             TaskState::Idle => {}
             TaskState::Running(report) => {
                 ui.label(report.summary());
                 ui.spinner();
             }
-            TaskState::Done(report) => {
-                ui.label(RichText::new(report.summary()).color(SUCCESS_COLOR));
+            TaskState::Done(TaskResult { note: Some(note), .. }) => {
+                ui.label(RichText::new(*note).weak());
+            }
+            TaskState::Done(result) => {
+                ui.label(RichText::new(result.report.summary()).color(result_color));
             }
             TaskState::Skipped => {
                 ui.label(RichText::new("пропущено: нужны права администратора").weak());
             }
-        });
+        }
     }
 
     fn footer(&mut self, ui: &mut Ui) {
@@ -250,9 +306,18 @@ impl HexCleanerApp {
                     .tasks
                     .iter()
                     .any(|task| self.is_available(task) && self.settings.is_selected(task.id));
-                let button = Button::new(RichText::new("Начать очистку").strong()).min_size(vec2(150.0, 30.0));
-                if ui.add_enabled(has_selection, button).clicked() {
-                    self.start_cleanup();
+
+                let analyze = Button::new("Анализ").min_size(vec2(110.0, 30.0));
+                let response = ui
+                    .add_enabled(has_selection, analyze)
+                    .on_hover_text("Показать, сколько мусора и в каких папках будет удалено. Ничего не удаляет.");
+                if response.clicked() {
+                    self.start(Mode::Analyze);
+                }
+
+                let clean = Button::new(RichText::new("Начать очистку").strong()).min_size(vec2(150.0, 30.0));
+                if ui.add_enabled(has_selection, clean).clicked() {
+                    self.start(Mode::Clean);
                 }
             }
 
@@ -285,15 +350,33 @@ impl HexCleanerApp {
     fn status_line(&self, ui: &mut Ui) {
         match &self.status {
             Status::Ready => {
-                ui.label(RichText::new("Отметьте нужные пункты и нажмите «Начать очистку».").weak());
+                ui.label(
+                    RichText::new(
+                        "Отметьте нужные пункты. «Анализ» покажет, сколько мусора найдётся, ничего не удаляя.",
+                    )
+                    .weak(),
+                );
             }
-            Status::Running => {
+            Status::Running(mode) => {
+                let action = match mode {
+                    Mode::Clean => "Идёт очистка",
+                    Mode::Analyze => "Идёт анализ",
+                };
                 ui.horizontal(|ui| {
                     ui.spinner();
-                    ui.label(format!("Идёт очистка… {}", self.running_total().summary()));
+                    ui.label(format!("{action}… {}", self.running_total().summary()));
                 });
             }
-            Status::Finished { total, cancelled } => {
+            Status::Finished { mode: Mode::Analyze, total, cancelled } => {
+                let text = format!(
+                    "{}: найдено файлов {}, можно освободить {}. Нажмите на треугольник у пункта, чтобы увидеть папки.",
+                    if *cancelled { "Анализ остановлен" } else { "Анализ завершён" },
+                    total.deleted_files,
+                    format_size(total.freed_bytes)
+                );
+                ui.label(RichText::new(text).strong());
+            }
+            Status::Finished { mode: Mode::Clean, total, cancelled } => {
                 let mut text = format!(
                     "{}: удалено файлов {}, освобождено {}",
                     if *cancelled { "Остановлено" } else { "Готово" },
@@ -327,6 +410,41 @@ impl eframe::App for HexCleanerApp {
         Panel::bottom("footer").show(ui, |ui| self.footer(ui));
         CentralPanel::default().show(ui, |ui| self.task_list(ui));
     }
+}
+
+/// Таблица «объём — число файлов — папка» для раскрытого пункта.
+fn locations_grid(ui: &mut Ui, task_id: &str, locations: &[Location]) {
+    Grid::new(("locations", task_id)).num_columns(3).spacing([16.0, 2.0]).show(ui, |ui| {
+        for location in locations.iter().take(MAX_SHOWN_LOCATIONS) {
+            ui.label(RichText::new(format_size(location.bytes)).strong());
+            ui.label(format!("{} файлов", location.files));
+            let hint = format!("{}\n\nОткрыть папку в проводнике", location.path.display());
+            if ui.link(short_path(&location.path)).on_hover_text(hint).clicked() {
+                open_in_explorer(&location.path);
+            }
+            ui.end_row();
+        }
+    });
+
+    let hidden = locations.len().saturating_sub(MAX_SHOWN_LOCATIONS);
+    if hidden > 0 {
+        ui.label(RichText::new(format!("…и ещё папок: {hidden}. Полный список — в журнале.")).weak());
+    }
+}
+
+/// Сокращает путь, заменяя известные папки переменными: `%LOCALAPPDATA%\Google\Chrome\...`.
+fn short_path(path: &Path) -> String {
+    let full = path.display().to_string();
+    // Сначала более глубокие папки: %TEMP% лежит внутри %LOCALAPPDATA%, а та — внутри %USERPROFILE%.
+    for variable in ["TEMP", "LOCALAPPDATA", "APPDATA", "USERPROFILE", "PROGRAMDATA", "WINDIR"] {
+        let Ok(prefix) = std::env::var(variable) else { continue };
+        let prefix = prefix.trim_end_matches('\\');
+        let matches = full.get(..prefix.len()).is_some_and(|start| start.eq_ignore_ascii_case(prefix));
+        if !prefix.is_empty() && matches {
+            return format!("%{variable}%{}", &full[prefix.len()..]);
+        }
+    }
+    full
 }
 
 /// Открывает файл в программе по умолчанию или папку в проводнике.

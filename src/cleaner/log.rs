@@ -1,4 +1,5 @@
 //! Журнал очистки: текстовый файл со всеми удалёнными файлами и ошибками.
+//! Анализ тоже пишет журнал (отчёт): в нём только итоги по папкам, без списка файлов.
 //!
 //! Журналы сохраняются в `%LOCALAPPDATA%\HexCleaner\logs`. Журнал текущей очистки
 //! остаётся обычным текстом, а журналы прошлых очисток сжимаются в zip-архивы
@@ -12,31 +13,37 @@ use chrono::{Datelike, Timelike};
 use zip::write::SimpleFileOptions;
 use zip::{CompressionMethod, ZipWriter};
 
-use super::report::{TaskReport, format_size};
+use super::Mode;
+use super::report::{TaskReport, TaskResult, format_size};
 
 pub struct CleanupLog {
     path: PathBuf,
     writer: BufWriter<File>,
+    mode: Mode,
 }
 
 impl CleanupLog {
     /// Создаёт новый файл журнала с текущей датой и временем в имени.
     /// Если `compress_previous` — журналы прошлых очисток предварительно сжимаются.
-    pub fn create(compress_previous: bool) -> io::Result<Self> {
-        Self::create_in(&logs_directory(), compress_previous)
+    pub fn create(mode: Mode, compress_previous: bool) -> io::Result<Self> {
+        Self::create_in(&logs_directory(), mode, compress_previous)
     }
 
-    fn create_in(dir: &Path, compress_previous: bool) -> io::Result<Self> {
+    fn create_in(dir: &Path, mode: Mode, compress_previous: bool) -> io::Result<Self> {
         fs::create_dir_all(dir)?;
         if compress_previous {
             compress_previous_logs(dir);
         }
 
         let now = chrono::Local::now();
-        let path = dir.join(format!("cleanup_{}.log", now.format("%Y-%m-%d_%H-%M-%S")));
-        let mut log = Self { writer: BufWriter::new(File::create(&path)?), path };
+        let (prefix, title) = match mode {
+            Mode::Clean => ("cleanup", "журнал очистки"),
+            Mode::Analyze => ("analysis", "отчёт анализа (ничего не удалялось)"),
+        };
+        let path = dir.join(format!("{prefix}_{}.log", now.format("%Y-%m-%d_%H-%M-%S")));
+        let mut log = Self { writer: BufWriter::new(File::create(&path)?), path, mode };
 
-        log.line(&format!("HexCleaner {} — журнал очистки", env!("CARGO_PKG_VERSION")));
+        log.line(&format!("HexCleaner {} — {title}", env!("CARGO_PKG_VERSION")));
         log.line(&format!("Начало: {}", now.format("%d.%m.%Y %H:%M:%S")));
         Ok(log)
     }
@@ -67,21 +74,43 @@ impl CleanupLog {
         self.line(&format!("  пропущен   {}: {reason}", path.display()));
     }
 
-    pub fn task_finished(&mut self, report: &TaskReport) {
-        self.line(&format!("Итог: {}", report.summary()));
+    pub fn task_finished(&mut self, result: &TaskResult) {
+        if let Some(note) = result.note {
+            self.line(&format!("  {note}"));
+        }
+        for location in &result.locations {
+            self.line(&format!(
+                "  папка   {:>10}  {:>6} файлов  {}",
+                format_size(location.bytes),
+                location.files,
+                location.path.display()
+            ));
+        }
+        let prefix = match self.mode {
+            Mode::Clean => "Итог",
+            Mode::Analyze => "Найдено",
+        };
+        self.line(&format!("{prefix}: {}", result.report.summary()));
     }
 
     pub fn finish(&mut self, total: &TaskReport, cancelled: bool) {
         self.line("");
         if cancelled {
-            self.line("Очистка остановлена пользователем.");
+            self.line("Остановлено пользователем.");
         }
-        self.line(&format!(
-            "ВСЕГО: удалено файлов {}, освобождено {}, не удалось удалить {}",
-            total.deleted_files,
-            format_size(total.freed_bytes),
-            total.failed
-        ));
+        match self.mode {
+            Mode::Clean => self.line(&format!(
+                "ВСЕГО: удалено файлов {}, освобождено {}, не удалось удалить {}",
+                total.deleted_files,
+                format_size(total.freed_bytes),
+                total.failed
+            )),
+            Mode::Analyze => self.line(&format!(
+                "ВСЕГО: найдено файлов {}, можно освободить {}",
+                total.deleted_files,
+                format_size(total.freed_bytes)
+            )),
+        }
         if total.freed_memory > 0 {
             self.line(&format!("Освобождено оперативной памяти: {}", format_size(total.freed_memory)));
         }
@@ -143,7 +172,7 @@ fn zip_date_time(time: &chrono::DateTime<chrono::Local>) -> zip::DateTime {
 #[cfg(test)]
 impl CleanupLog {
     pub fn for_tests(dir: &Path) -> Self {
-        Self::create_in(dir, true).unwrap()
+        Self::create_in(dir, Mode::Clean, true).unwrap()
     }
 }
 

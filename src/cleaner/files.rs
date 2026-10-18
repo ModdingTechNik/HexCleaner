@@ -3,7 +3,8 @@
 //! Правила безопасности:
 //! * символические ссылки и точки соединения (junction) никогда не открываются
 //!   и не удаляются — за ними может оказаться папка с пользовательскими файлами;
-//! * занятые файлы просто пропускаются, очистка продолжается.
+//! * занятые файлы просто пропускаются, очистка продолжается;
+//! * при анализе (`TaskRun::is_analysis`) ничего не удаляется и не меняется — даже атрибуты.
 
 use std::fs::{self, Metadata};
 use std::os::windows::fs::MetadataExt;
@@ -73,10 +74,15 @@ pub fn delete_directory(run: &mut TaskRun, dir: &Path, metadata: &Metadata) {
 
 /// Удаляет один файл и записывает результат в статистику и журнал.
 pub fn delete_file(run: &mut TaskRun, path: &Path, metadata: &Metadata) -> bool {
+    if run.is_analysis() {
+        run.record_file(path, metadata.len());
+        return true;
+    }
+
     clear_readonly(path, metadata);
     match delete::delete_file(path) {
         Ok(()) => {
-            run.file_deleted(path, metadata.len());
+            run.record_file(path, metadata.len());
             true
         }
         Err(error) => {
@@ -106,12 +112,29 @@ pub fn directory_size(dir: &Path) -> u64 {
         .sum()
 }
 
+/// Размеры файлов с расширением `extension` прямо в папке `dir` (без вложенных папок).
+pub fn file_sizes(dir: &Path, extension: &str) -> Vec<u64> {
+    let Ok(entries) = fs::read_dir(dir) else {
+        return Vec::new();
+    };
+    entries
+        .filter_map(Result::ok)
+        .filter(|entry| entry.path().extension().is_some_and(|ext| ext.eq_ignore_ascii_case(extension)))
+        .filter_map(|entry| entry.metadata().ok())
+        .filter(|metadata| metadata.is_file())
+        .map(|metadata| metadata.len())
+        .collect()
+}
+
 /// Символическая ссылка, точка соединения или другая точка повторного анализа.
 pub fn is_link(metadata: &Metadata) -> bool {
     metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
 }
 
 fn remove_empty_directory(run: &mut TaskRun, dir: &Path, metadata: &Metadata) -> bool {
+    if run.is_analysis() {
+        return true;
+    }
     clear_readonly(dir, metadata);
     match fs::remove_dir(dir) {
         Ok(()) => true,
