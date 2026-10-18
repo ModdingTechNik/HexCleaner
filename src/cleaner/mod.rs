@@ -4,6 +4,7 @@
 //! Поток сообщает о ходе работы через канал событий [`CleanupEvent`],
 //! а интерфейс может попросить его остановиться через [`CleanupJob::cancel`].
 
+mod failure;
 mod files;
 mod log;
 mod paths;
@@ -17,6 +18,7 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 use crate::catalog::{Action, CleanupTask};
+use crate::system::delete::DeleteError;
 use crate::system::{event_log, memory, services};
 
 pub use log::logs_directory;
@@ -147,6 +149,8 @@ pub struct TaskRun<'a> {
     events: &'a Sender<CleanupEvent>,
     cancel: &'a AtomicBool,
     last_progress: Instant,
+    /// Сколько ещё раз можно узнавать, какой процесс держит файл (см. `failure`).
+    lock_queries_left: u32,
 }
 
 impl<'a> TaskRun<'a> {
@@ -156,7 +160,15 @@ impl<'a> TaskRun<'a> {
         events: &'a Sender<CleanupEvent>,
         cancel: &'a AtomicBool,
     ) -> Self {
-        Self { task_index, report: TaskReport::default(), log, events, cancel, last_progress: Instant::now() }
+        Self {
+            task_index,
+            report: TaskReport::default(),
+            log,
+            events,
+            cancel,
+            last_progress: Instant::now(),
+            lock_queries_left: failure::LOCK_QUERIES_PER_TASK,
+        }
     }
 
     fn execute(&mut self, task: &CleanupTask) {
@@ -297,9 +309,11 @@ impl<'a> TaskRun<'a> {
         }
     }
 
-    fn failed(&mut self, path: &Path, error: &dyn std::fmt::Display) {
+    /// Файл не удалось удалить: считаем ошибку и пишем в журнал понятную причину.
+    fn delete_failed(&mut self, path: &Path, error: &DeleteError) {
         self.report.failed += 1;
-        self.log.failed(path, error);
+        let reason = failure::explain(path, error, &mut self.lock_queries_left);
+        self.log.failed(path, &reason);
     }
 
     fn skipped(&mut self, path: &Path, reason: &str) {

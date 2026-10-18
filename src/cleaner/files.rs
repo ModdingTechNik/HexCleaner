@@ -11,6 +11,7 @@ use std::path::Path;
 use std::time::{Duration, SystemTime};
 
 use super::TaskRun;
+use crate::system::delete;
 
 const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
 
@@ -73,13 +74,13 @@ pub fn delete_directory(run: &mut TaskRun, dir: &Path, metadata: &Metadata) {
 /// Удаляет один файл и записывает результат в статистику и журнал.
 pub fn delete_file(run: &mut TaskRun, path: &Path, metadata: &Metadata) -> bool {
     clear_readonly(path, metadata);
-    match fs::remove_file(path) {
+    match delete::delete_file(path) {
         Ok(()) => {
             run.file_deleted(path, metadata.len());
             true
         }
         Err(error) => {
-            run.failed(path, &error);
+            run.delete_failed(path, &error);
             false
         }
     }
