@@ -43,7 +43,8 @@ pub fn trim_all_working_sets() -> TrimResult {
     result
 }
 
-fn process_ids() -> Vec<u32> {
+/// Номера всех запущенных процессов.
+pub(super) fn process_ids() -> Vec<u32> {
     let mut ids = vec![0u32; 4096];
     let mut bytes_returned = 0;
     let ok = unsafe {

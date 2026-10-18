@@ -3,17 +3,20 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::Arc;
+use std::sync::mpsc::{self, Receiver};
+use std::thread;
 use std::time::Duration;
 
 use eframe::egui::collapsing_header::CollapsingState;
 use eframe::egui::{
-    self, Align, Button, CentralPanel, Checkbox, Color32, ComboBox, Grid, Key, Layout, Panel, RichText, ScrollArea,
-    TextEdit, Ui, vec2,
+    self, Align, Button, CentralPanel, Checkbox, Color32, ComboBox, Grid, Id, Key, Layout, Modal, Panel, RichText,
+    ScrollArea, TextEdit, Ui, vec2,
 };
 
 use hexcleaner::catalog::{self, CleanupTask, Safety};
 use hexcleaner::cleaner::{
-    self, CleanupEvent, CleanupJob, CleanupOptions, Location, Mode, TaskReport, TaskResult, format_size,
+    self, BlockingApp, CleanupEvent, CleanupJob, CleanupOptions, Location, Mode, TaskReport, TaskResult,
+    find_blocking_apps, format_size,
 };
 use hexcleaner::i18n::{self, LanguageInfo};
 use hexcleaner::presets::{self, ActivePreset, Selection};
@@ -84,6 +87,10 @@ enum TaskState {
 /// Строка состояния внизу окна.
 enum Status {
     Ready,
+    /// Перед очисткой ищем программы, которые ей мешают.
+    CheckingPrograms,
+    /// Закрываем программы, которые мешают очистке.
+    ClosingPrograms,
     Running(Mode),
     Finished { mode: Mode, total: TaskReport, cancelled: bool },
     Error(String),
@@ -106,6 +113,24 @@ pub struct HexCleanerApp {
     new_preset_name: Option<String>,
     /// Поставить курсор в поле названия набора (один раз, когда поле появилось).
     focus_preset_name: bool,
+    /// Перед очисткой: поиск программ, которые ей мешают, и диалог с предложением их закрыть.
+    programs_check: ProgramsCheck,
+}
+
+/// Этап проверки программ, мешающих очистке.
+enum ProgramsCheck {
+    Idle,
+    /// Поиск идёт в отдельном потоке — он занимает секунду-две.
+    Searching(Receiver<Vec<BlockingApp>>),
+    /// Диалог: какие программы закрыть (галочки) и запускать ли их снова после очистки.
+    Asking { apps: Vec<(BlockingApp, bool)>, restart: bool },
+}
+
+/// Что пользователь выбрал в диалоге закрытия программ.
+enum ProgramsDecision {
+    CloseAndClean,
+    CleanWithoutClosing,
+    Cancel,
 }
 
 impl HexCleanerApp {
@@ -132,6 +157,7 @@ impl HexCleanerApp {
             languages: Vec::new(),
             new_preset_name: None,
             focus_preset_name: false,
+            programs_check: ProgramsCheck::Idle,
         };
         app.refresh_languages();
         if let Some(error) = language_error {
@@ -140,8 +166,9 @@ impl HexCleanerApp {
         app
     }
 
+    /// Идёт очистка, анализ или подготовка к ним (поиск программ, диалог).
     fn is_running(&self) -> bool {
-        self.job.is_some()
+        self.job.is_some() || !matches!(self.programs_check, ProgramsCheck::Idle)
     }
 
     /// Можно ли выполнить пункт при текущих правах.
@@ -170,13 +197,14 @@ impl HexCleanerApp {
 
     // --- Действия ---
 
-    /// Запускает очистку или анализ отмеченных пунктов.
-    fn start(&mut self, mode: Mode) {
-        // Передаём все отмеченные пункты: недоступные без прав движок пропустит и отметит в журнале.
-        let selected: Vec<usize> = (0..self.tasks.len())
-            .filter(|&index| self.is_selected(&self.tasks[index]))
-            .collect();
+    /// Отмеченные пункты, включая недоступные без прав: движок их пропустит и отметит в журнале.
+    fn selected_indices(&self) -> Vec<usize> {
+        (0..self.tasks.len()).filter(|&index| self.is_selected(&self.tasks[index])).collect()
+    }
 
+    /// Запускает очистку или анализ отмеченных пунктов. Перед очисткой закрывает
+    /// программы `close_programs` и, если `restart_programs`, после очистки запускает их снова.
+    fn start(&mut self, mode: Mode, close_programs: Vec<String>, restart_programs: bool) {
         self.task_states.fill(TaskState::Idle);
         self.mode = mode;
         self.status = Status::Running(mode);
@@ -184,8 +212,97 @@ impl HexCleanerApp {
             mode,
             is_admin: self.is_admin,
             compress_old_logs: self.settings.compress_old_logs,
+            close_programs,
+            restart_programs,
         };
-        self.job = Some(CleanupJob::start(Arc::clone(&self.tasks), selected, options));
+        self.job = Some(CleanupJob::start(Arc::clone(&self.tasks), self.selected_indices(), options));
+    }
+
+    /// Кнопка «Начать очистку»: сначала ищем программы, которые мешают очистке.
+    fn check_programs_and_clean(&mut self) {
+        let (sender, receiver) = mpsc::channel();
+        let tasks = Arc::clone(&self.tasks);
+        let selected = self.selected_indices();
+        thread::spawn(move || {
+            let _ = sender.send(find_blocking_apps(&tasks, &selected));
+        });
+        self.status = Status::CheckingPrograms;
+        self.programs_check = ProgramsCheck::Searching(receiver);
+    }
+
+    /// Поиск программ закончился: если мешать некому — сразу чистим, иначе спрашиваем.
+    fn poll_programs_check(&mut self, ctx: &egui::Context) {
+        let ProgramsCheck::Searching(receiver) = &self.programs_check else { return };
+        match receiver.try_recv() {
+            Ok(apps) if apps.is_empty() => {
+                self.programs_check = ProgramsCheck::Idle;
+                self.start(Mode::Clean, Vec::new(), false);
+            }
+            Ok(apps) => {
+                let apps = apps.into_iter().map(|app| (app, true)).collect();
+                self.programs_check = ProgramsCheck::Asking { apps, restart: true };
+                self.status = Status::Ready;
+            }
+            Err(mpsc::TryRecvError::Empty) => ctx.request_repaint_after(Duration::from_millis(100)),
+            Err(mpsc::TryRecvError::Disconnected) => {
+                self.programs_check = ProgramsCheck::Idle;
+                self.start(Mode::Clean, Vec::new(), false);
+            }
+        }
+    }
+
+    /// Диалог «Эти программы мешают очистке»: что закрыть и запускать ли их потом снова.
+    fn programs_dialog(&mut self, ctx: &egui::Context) {
+        let tasks = Arc::clone(&self.tasks);
+        let ProgramsCheck::Asking { apps, restart } = &mut self.programs_check else { return };
+        let mut decision = None;
+
+        let modal = Modal::new(Id::unique("close_programs")).show(ctx, |ui| {
+            ui.set_max_width(480.0);
+            ui.heading(t!("apps.title"));
+            ui.label(t!("apps.intro"));
+            ui.add_space(8.0);
+
+            for (app, close) in apps.iter_mut() {
+                ui.checkbox(close, app.label());
+                let blocks: Vec<String> = app.tasks.iter().map(|&index| tasks[index].title()).collect();
+                ui.indent(&app.exe, |ui| {
+                    ui.label(RichText::new(t!("apps.blocks", tasks = blocks.join("; "))).weak());
+                });
+            }
+
+            ui.add_space(8.0);
+            ui.checkbox(restart, t!("apps.restart"));
+            ui.label(RichText::new(t!("apps.warning")).weak());
+            ui.separator();
+
+            ui.horizontal(|ui| {
+                if ui.button(RichText::new(t!("apps.close_and_clean")).strong()).clicked() {
+                    decision = Some(ProgramsDecision::CloseAndClean);
+                }
+                if ui.button(t!("apps.clean_without_closing")).clicked() {
+                    decision = Some(ProgramsDecision::CleanWithoutClosing);
+                }
+                if ui.button(t!("apps.cancel")).clicked() {
+                    decision = Some(ProgramsDecision::Cancel);
+                }
+            });
+        });
+        if modal.should_close() && decision.is_none() {
+            decision = Some(ProgramsDecision::Cancel);
+        }
+
+        let Some(decision) = decision else { return };
+        let programs: Vec<String> =
+            apps.iter().filter(|(_, close)| *close).flat_map(|(app, _)| app.exes.clone()).collect();
+        let restart = *restart;
+        self.programs_check = ProgramsCheck::Idle;
+
+        match decision {
+            ProgramsDecision::CloseAndClean => self.start(Mode::Clean, programs, restart),
+            ProgramsDecision::CleanWithoutClosing => self.start(Mode::Clean, Vec::new(), false),
+            ProgramsDecision::Cancel => self.status = Status::Ready,
+        }
     }
 
     fn restart_as_admin(&mut self, ctx: &egui::Context) {
@@ -246,7 +363,11 @@ impl HexCleanerApp {
         let mut finished = false;
         for event in job.poll_events() {
             match event {
-                CleanupEvent::TaskStarted(index) => self.task_states[index] = TaskState::Running(TaskReport::default()),
+                CleanupEvent::ClosingPrograms => self.status = Status::ClosingPrograms,
+                CleanupEvent::TaskStarted(index) => {
+                    self.status = Status::Running(self.mode);
+                    self.task_states[index] = TaskState::Running(TaskReport::default());
+                }
                 CleanupEvent::Progress(index, report) => self.task_states[index] = TaskState::Running(report),
                 CleanupEvent::TaskFinished(index, result) => self.task_states[index] = TaskState::Done(result),
                 CleanupEvent::TaskSkipped(index) => self.task_states[index] = TaskState::Skipped,
@@ -595,13 +716,14 @@ impl HexCleanerApp {
 
                 let analyze = Button::new(t!("footer.analyze")).min_size(vec2(110.0, 30.0));
                 let response = ui.add_enabled(has_selection, analyze).on_hover_text(t!("footer.analyze.hint"));
-                if response.clicked() {
-                    self.start(Mode::Analyze);
+                let can_start = has_selection && !self.is_running();
+                if response.clicked() && can_start {
+                    self.start(Mode::Analyze, Vec::new(), false);
                 }
 
                 let clean = Button::new(RichText::new(t!("footer.clean")).strong()).min_size(vec2(150.0, 30.0));
-                if ui.add_enabled(has_selection, clean).clicked() {
-                    self.start(Mode::Clean);
+                if ui.add_enabled(can_start, clean).clicked() {
+                    self.check_programs_and_clean();
                 }
             }
 
@@ -633,6 +755,16 @@ impl HexCleanerApp {
         match &self.status {
             Status::Ready => {
                 ui.label(RichText::new(t!("status.ready")).weak());
+            }
+            Status::CheckingPrograms | Status::ClosingPrograms => {
+                let text = match self.status {
+                    Status::CheckingPrograms => t!("status.checking_programs"),
+                    _ => t!("status.closing_programs"),
+                };
+                ui.horizontal(|ui| {
+                    ui.spinner();
+                    ui.label(text);
+                });
             }
             Status::Running(mode) => {
                 let summary = self.running_total().summary();
@@ -679,6 +811,8 @@ impl HexCleanerApp {
 impl eframe::App for HexCleanerApp {
     fn ui(&mut self, ui: &mut Ui, _frame: &mut eframe::Frame) {
         self.process_cleanup_events(ui.ctx());
+        self.poll_programs_check(ui.ctx());
+        self.programs_dialog(ui.ctx());
 
         Panel::top("header").show(ui, |ui| {
             ui.add_space(6.0);

@@ -7,6 +7,7 @@
 //! Тот же движок выполняет и предварительный анализ ([`Mode::Analyze`]): обходит те же
 //! папки по тем же правилам, но ничего не удаляет и не меняет, а только считает.
 
+mod blockers;
 mod failure;
 mod files;
 mod log;
@@ -22,9 +23,11 @@ use std::time::{Duration, Instant};
 
 use crate::catalog::{Action, CleanupTask};
 use crate::system::delete::DeleteError;
+use crate::system::restart_manager::{self, ClosedPrograms};
 use crate::system::{event_log, memory, recycle_bin, services};
 use crate::t;
 
+pub use blockers::{BlockingApp, find_blocking_apps};
 pub use log::logs_directory;
 use log::CleanupLog;
 pub use report::{Location, TaskReport, TaskResult, format_size};
@@ -34,6 +37,8 @@ const PROGRESS_INTERVAL: Duration = Duration::from_millis(100);
 
 /// Сообщения от потока очистки к интерфейсу. `usize` — индекс пункта в каталоге.
 pub enum CleanupEvent {
+    /// Закрываются программы, мешающие очистке (может занять несколько секунд).
+    ClosingPrograms,
     TaskStarted(usize),
     /// Промежуточные счётчики выполняющегося пункта.
     Progress(usize, TaskReport),
@@ -55,13 +60,18 @@ pub enum Mode {
 }
 
 /// Параметры запуска очистки.
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 pub struct CleanupOptions {
     pub mode: Mode,
     /// Есть ли у программы права администратора. Без них пункты, требующие этих прав, пропускаются.
     pub is_admin: bool,
     /// Сжать журналы прошлых очисток в zip-архивы перед созданием нового журнала.
     pub compress_old_logs: bool,
+    /// Программы (имена файлов, например `chrome.exe`), которые нужно корректно закрыть
+    /// перед очисткой. Обычно это [`find_blocking_apps`]. При анализе не закрываются.
+    pub close_programs: Vec<String>,
+    /// Запустить закрытые программы снова после очистки.
+    pub restart_programs: bool,
 }
 
 /// Запущенная очистка.
@@ -128,6 +138,13 @@ fn run_cleanup(
     };
     log.line(&if is_admin { t!("log.admin_yes") } else { t!("log.admin_no") });
 
+    let closed_programs = if options.mode == Mode::Clean && !options.close_programs.is_empty() {
+        let _ = events.send(CleanupEvent::ClosingPrograms);
+        close_programs(&options.close_programs, &mut log)
+    } else {
+        None
+    };
+
     let mut total = TaskReport::default();
     for &index in selected {
         if cancel.load(Ordering::Relaxed) {
@@ -152,9 +169,39 @@ fn run_cleanup(
         let _ = events.send(CleanupEvent::TaskFinished(index, result));
     }
 
+    if options.restart_programs
+        && let Some(closed) = &closed_programs
+    {
+        log.line("");
+        match closed.restart() {
+            Ok(()) => log.line(&t!("log.programs_restarted")),
+            Err(error) => log.line(&t!("log.programs_restart_failed", error = error)),
+        }
+    }
+
     let cancelled = cancel.load(Ordering::Relaxed);
     log.finish(&total, cancelled);
     let _ = events.send(CleanupEvent::Finished { total, log_path: log.path().to_owned(), cancelled });
+}
+
+/// Корректно закрывает программы, мешающие очистке, и пишет результат в журнал.
+fn close_programs(exes: &[String], log: &mut CleanupLog) -> Option<ClosedPrograms> {
+    log.line("");
+    log.line(&t!("log.closing_programs", programs = exes.join(", ")));
+    match restart_manager::close_programs(exes) {
+        Ok(closed) => {
+            if closed.still_running.is_empty() {
+                log.line(&t!("log.programs_closed"));
+            } else {
+                log.line(&t!("log.programs_still_running", programs = closed.still_running.join(", ")));
+            }
+            Some(closed)
+        }
+        Err(error) => {
+            log.line(&t!("log.programs_close_failed", error = error));
+            None
+        }
+    }
 }
 
 /// Выполнение одного пункта: счётчики, журнал и флаг отмены в одном месте.

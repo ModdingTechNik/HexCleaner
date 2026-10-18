@@ -15,7 +15,9 @@ use std::sync::mpsc::RecvTimeoutError;
 use std::time::Duration;
 
 use crate::catalog::{self, CleanupTask, Safety};
-use crate::cleaner::{CleanupEvent, CleanupJob, CleanupOptions, Mode, TaskReport, TaskResult, format_size};
+use crate::cleaner::{
+    BlockingApp, CleanupEvent, CleanupJob, CleanupOptions, Mode, TaskReport, TaskResult, find_blocking_apps, format_size,
+};
 use crate::presets;
 use crate::settings::Settings;
 use crate::system::{admin, console};
@@ -143,19 +145,27 @@ fn run_cleanup(request: &RunRequest, settings: &Settings) -> ExitCode {
     };
 
     let is_admin = admin::is_elevated();
-    let options = CleanupOptions {
-        mode: request.mode,
-        is_admin,
-        compress_old_logs: request.compress_logs.unwrap_or(settings.compress_old_logs),
-    };
-
     if !request.quiet {
         println!("{}", header(request.mode));
         if !is_admin && selected.iter().any(|&index| tasks[index].requires_admin) {
             println!("{}", t!("cli.admin_warning"));
         }
+    }
+
+    // Программы, мешающие очистке, ищем только по запросу: это занимает время.
+    let blocking_apps = if request.close_apps { find_blocking_apps(&tasks, &selected) } else { Vec::new() };
+    if !request.quiet {
+        print_blocking_apps(&blocking_apps, request.mode);
         println!();
     }
+
+    let options = CleanupOptions {
+        mode: request.mode,
+        is_admin,
+        compress_old_logs: request.compress_logs.unwrap_or(settings.compress_old_logs),
+        close_programs: blocking_apps.iter().flat_map(|app| app.exes.clone()).collect(),
+        restart_programs: request.restart_apps,
+    };
 
     console::catch_ctrl_c();
     let mut progress = Progress::new(Arc::clone(&tasks), selected.len(), request);
@@ -164,6 +174,7 @@ fn run_cleanup(request: &RunRequest, settings: &Settings) -> ExitCode {
 
     loop {
         match job.wait_event(CTRL_C_CHECK_INTERVAL) {
+            Ok(CleanupEvent::ClosingPrograms) => {}
             Ok(CleanupEvent::TaskStarted(index)) => progress.task_started(index),
             Ok(CleanupEvent::Progress(..)) => {}
             Ok(CleanupEvent::TaskFinished(index, result)) => progress.task_finished(index, &result),
@@ -184,6 +195,25 @@ fn run_cleanup(request: &RunRequest, settings: &Settings) -> ExitCode {
             }
             Err(RecvTimeoutError::Disconnected) => return ExitCode::Failed,
         }
+    }
+}
+
+/// «Закрываю программы: Google Chrome (chrome.exe) — мешает: …». При анализе — только список.
+fn print_blocking_apps(apps: &[BlockingApp], mode: Mode) {
+    if apps.is_empty() {
+        return;
+    }
+    println!(
+        "{}",
+        match mode {
+            Mode::Clean => t!("cli.closing_apps"),
+            Mode::Analyze => t!("cli.blocking_apps"),
+        }
+    );
+    let tasks = catalog::all_tasks();
+    for app in apps {
+        let blocks: Vec<String> = app.tasks.iter().map(|&index| tasks[index].title()).collect();
+        println!("  {} — {}", app.label(), t!("apps.blocks", tasks = blocks.join("; ")));
     }
 }
 

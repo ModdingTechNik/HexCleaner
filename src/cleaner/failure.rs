@@ -2,7 +2,8 @@
 
 use std::path::Path;
 
-use crate::system::delete::{self, DeleteError, DeleteFailure, LockingProcess};
+use crate::system::delete::{self, DeleteError, DeleteFailure};
+use crate::system::restart_manager::{self, AffectedApp};
 use crate::t;
 
 /// Сколько раз за один пункт можно спросить Restart Manager, какой процесс держит файл.
@@ -48,7 +49,7 @@ fn locking_processes(path: &Path, queries_left: &mut u32) -> Option<Lockers> {
     }
     *queries_left -= 1;
 
-    let processes = delete::locking_processes(path).ok()?;
+    let processes = restart_manager::apps_using(path).ok()?;
     if processes.is_empty() {
         return None;
     }
@@ -57,10 +58,11 @@ fn locking_processes(path: &Path, queries_left: &mut u32) -> Option<Lockers> {
 }
 
 /// «chrome.exe (PID 1234)» или «svchost.exe (PID 980, служба DoSvc)».
-fn describe_process(process: &LockingProcess) -> String {
-    match &process.service {
-        Some(service) => t!("failure.process_service", name = process.name, pid = process.pid, service = service),
-        None => t!("failure.process", name = process.name, pid = process.pid),
+fn describe_process(app: &AffectedApp) -> String {
+    let (name, pid) = (&app.exe, app.process.pid);
+    match &app.service {
+        Some(service) => t!("failure.process_service", name = name, pid = pid, service = service),
+        None => t!("failure.process", name = name, pid = pid),
     }
 }
 

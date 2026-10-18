@@ -7,6 +7,7 @@ pub mod event_log;
 pub mod locale;
 pub mod memory;
 pub mod recycle_bin;
+pub mod restart_manager;
 pub mod services;
 
 use windows::Win32::Foundation::{CloseHandle, HANDLE};

@@ -83,12 +83,49 @@ impl Safety {
     }
 }
 
+/// Программа, которую можно закрыть перед очисткой.
+pub struct Program {
+    /// Главный исполняемый файл программы.
+    pub exe: &'static str,
+    /// Вспомогательные процессы программы. Если файлы держат они, закрывается вся программа.
+    pub helpers: &'static [&'static str],
+}
+
+impl Program {
+    /// Главный файл и все вспомогательные.
+    pub fn all_exes(&self) -> impl Iterator<Item = &'static str> {
+        std::iter::once(self.exe).chain(self.helpers.iter().copied())
+    }
+}
+
+/// Браузеры. Chromium, Cent Browser и Chrome запускаются одним и тем же `chrome.exe`.
+const BROWSERS: &[Program] = &[
+    Program { exe: "chrome.exe", helpers: &[] },
+    Program { exe: "msedge.exe", helpers: &[] },
+    Program { exe: "firefox.exe", helpers: &[] },
+    Program { exe: "opera.exe", helpers: &[] },
+    Program { exe: "browser.exe", helpers: &[] },
+    Program { exe: "brave.exe", helpers: &[] },
+    Program { exe: "vivaldi.exe", helpers: &[] },
+];
+
+/// Лаунчеры игр.
+const GAME_LAUNCHERS: &[Program] = &[
+    Program { exe: "steam.exe", helpers: &["steamwebhelper.exe"] },
+    Program { exe: "EpicGamesLauncher.exe", helpers: &["EpicWebHelper.exe"] },
+];
+
 /// Пункт очистки, который пользователь видит в списке.
 pub struct CleanupTask {
     /// Стабильный идентификатор — по нему сохраняется выбор пользователя
     /// и находятся заголовок и описание в файлах перевода.
     pub id: &'static str,
     pub safety: Safety,
+    /// Программы, которые перед очисткой можно предложить закрыть, если они держат
+    /// файлы пункта (браузеры — свой кэш, Steam — свой). Только явный список:
+    /// общие папки вроде кэша шейдеров видеокарты или `INetCache` держат десятки
+    /// посторонних программ и даже компоненты Windows — их закрывать нельзя.
+    pub programs_to_close: &'static [Program],
     pub requires_admin: bool,
     /// Службы, которые останавливаются на время очистки и затем запускаются снова.
     pub services_to_stop: &'static [&'static str],
@@ -128,6 +165,7 @@ pub fn all_tasks() -> Vec<CleanupTask> {
         CleanupTask {
             id: "memory",
             safety: Safety::Moderate,
+            programs_to_close: &[],
             requires_admin: true,
             services_to_stop: &[],
             actions: vec![Action::TrimProcessMemory],
@@ -135,6 +173,7 @@ pub fn all_tasks() -> Vec<CleanupTask> {
         CleanupTask {
             id: "games_gpu_cache",
             safety: Safety::Safe,
+            programs_to_close: GAME_LAUNCHERS,
             requires_admin: false,
             services_to_stop: &[],
             actions: games_and_gpu_cache_actions(),
@@ -142,6 +181,7 @@ pub fn all_tasks() -> Vec<CleanupTask> {
         CleanupTask {
             id: "installers_cache",
             safety: Safety::Caution,
+            programs_to_close: &[],
             requires_admin: true,
             services_to_stop: &[],
             actions: vec![
@@ -153,6 +193,7 @@ pub fn all_tasks() -> Vec<CleanupTask> {
         CleanupTask {
             id: "browsers_cache",
             safety: Safety::Safe,
+            programs_to_close: BROWSERS,
             requires_admin: false,
             services_to_stop: &[],
             actions: browser_cache_actions(),
@@ -160,6 +201,7 @@ pub fn all_tasks() -> Vec<CleanupTask> {
         CleanupTask {
             id: "explorer_cache",
             safety: Safety::Safe,
+            programs_to_close: &[],
             requires_admin: false,
             services_to_stop: &[],
             actions: vec![
@@ -171,6 +213,7 @@ pub fn all_tasks() -> Vec<CleanupTask> {
         CleanupTask {
             id: "defender_cache",
             safety: Safety::Caution,
+            programs_to_close: &[],
             requires_admin: true,
             services_to_stop: &[],
             actions: vec![
@@ -183,6 +226,7 @@ pub fn all_tasks() -> Vec<CleanupTask> {
         CleanupTask {
             id: "windows_setup_cache",
             safety: Safety::Caution,
+            programs_to_close: &[],
             requires_admin: true,
             services_to_stop: &[],
             actions: vec![
@@ -195,6 +239,7 @@ pub fn all_tasks() -> Vec<CleanupTask> {
         CleanupTask {
             id: "windows_update_cache",
             safety: Safety::Moderate,
+            programs_to_close: &[],
             requires_admin: true,
             services_to_stop: &["wuauserv", "bits", "dosvc"],
             actions: vec![
@@ -207,6 +252,7 @@ pub fn all_tasks() -> Vec<CleanupTask> {
         CleanupTask {
             id: "system_logs",
             safety: Safety::Caution,
+            programs_to_close: &[],
             requires_admin: true,
             services_to_stop: &[],
             actions: system_log_actions(),
@@ -214,6 +260,7 @@ pub fn all_tasks() -> Vec<CleanupTask> {
         CleanupTask {
             id: "driver_leftovers",
             safety: Safety::Safe,
+            programs_to_close: &[],
             requires_admin: true,
             services_to_stop: &[],
             actions: vec![
@@ -225,6 +272,7 @@ pub fn all_tasks() -> Vec<CleanupTask> {
         CleanupTask {
             id: "user_temp",
             safety: Safety::Safe,
+            programs_to_close: &[],
             requires_admin: false,
             services_to_stop: &[],
             actions: vec![clear_dir_older_than(r"%TEMP%", TEMP_MIN_AGE)],
@@ -232,6 +280,7 @@ pub fn all_tasks() -> Vec<CleanupTask> {
         CleanupTask {
             id: "system_temp",
             safety: Safety::Safe,
+            programs_to_close: &[],
             requires_admin: true,
             services_to_stop: &[],
             actions: vec![
@@ -244,6 +293,7 @@ pub fn all_tasks() -> Vec<CleanupTask> {
         CleanupTask {
             id: "diagnostics",
             safety: Safety::Moderate,
+            programs_to_close: &[],
             requires_admin: true,
             services_to_stop: &[],
             actions: vec![
@@ -255,6 +305,7 @@ pub fn all_tasks() -> Vec<CleanupTask> {
         CleanupTask {
             id: "user_reports",
             safety: Safety::Safe,
+            programs_to_close: &[],
             requires_admin: false,
             services_to_stop: &[],
             actions: vec![
@@ -265,6 +316,7 @@ pub fn all_tasks() -> Vec<CleanupTask> {
         CleanupTask {
             id: "system_reports",
             safety: Safety::Moderate,
+            programs_to_close: &[],
             requires_admin: true,
             services_to_stop: &[],
             actions: vec![
@@ -280,6 +332,7 @@ pub fn all_tasks() -> Vec<CleanupTask> {
             id: "recycle_bin",
             // Это файлы, которые пользователь удалил сам: после очистки их не вернуть.
             safety: Safety::Caution,
+            programs_to_close: &[],
             requires_admin: false,
             services_to_stop: &[],
             actions: vec![Action::EmptyRecycleBin],

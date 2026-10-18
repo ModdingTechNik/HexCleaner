@@ -32,6 +32,11 @@ pub struct RunRequest {
     pub quiet: bool,
     /// `--compress-logs` / `--no-compress-logs`; `None` — как настроено в программе.
     pub compress_logs: Option<bool>,
+    /// `--close-apps`: перед очисткой закрыть программы, которые держат файлы выбранных пунктов.
+    /// При анализе — только показать их.
+    pub close_apps: bool,
+    /// `--restart-apps`: после очистки запустить закрытые программы снова.
+    pub restart_apps: bool,
 }
 
 /// Какие пункты обработать. Наборы, пункты и `--selected` складываются,
@@ -70,6 +75,8 @@ pub fn parse(args: &[String]) -> Result<Arguments, UsageError> {
         details: false,
         quiet: false,
         compress_logs: None,
+        close_apps: false,
+        restart_apps: false,
     };
     let mut language = None;
     // Первый параметр анализа или очистки — чтобы сообщить об ошибке, если он указан у list или help.
@@ -98,6 +105,8 @@ pub fn parse(args: &[String]) -> Result<Arguments, UsageError> {
             "--quiet" | "-q" => request.quiet = true,
             "--compress-logs" => request.compress_logs = Some(true),
             "--no-compress-logs" => request.compress_logs = Some(false),
+            "--close-apps" => request.close_apps = true,
+            "--restart-apps" => request.restart_apps = true,
             _ => return Err(UsageError::UnknownOption(arg.clone())),
         }
         first_run_option.get_or_insert_with(|| name.to_owned());
@@ -156,6 +165,10 @@ mod tests {
         assert!(request.choice.is_empty());
         assert!(request.details);
         assert_eq!(request.compress_logs, Some(false));
+        assert!(!request.close_apps && !request.restart_apps);
+
+        let request = run_request("clean --preset safe --close-apps --restart-apps");
+        assert!(request.close_apps && request.restart_apps);
     }
 
     #[test]

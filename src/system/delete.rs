@@ -2,28 +2,20 @@
 //!
 //! Код ошибки Windows 5 «Отказано в доступе» объединяет несколько разных ситуаций.
 //! Чтобы их различить, сразу после неудачного `DeleteFileW` читаем исходный
-//! NTSTATUS ядра (`RtlGetLastNtStatus`) — он точнее. Дополнительно можно узнать,
-//! какие процессы держат файл (Restart Manager), и кто владелец файла.
+//! NTSTATUS ядра (`RtlGetLastNtStatus`) — он точнее. Дополнительно можно узнать
+//! владельца файла. Какие процессы держат файл — см. `restart_manager::apps_using`.
 
 use std::fmt;
 use std::io;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
-use windows::Win32::Foundation::{ERROR_LOCK_VIOLATION, ERROR_MORE_DATA, ERROR_SHARING_VIOLATION, HLOCAL, LocalFree, NTSTATUS};
+use windows::Win32::Foundation::{ERROR_LOCK_VIOLATION, ERROR_SHARING_VIOLATION, HLOCAL, LocalFree, NTSTATUS};
 use windows::Win32::Security::Authorization::{GetNamedSecurityInfoW, SE_FILE_OBJECT};
 use windows::Win32::Security::{
     LookupAccountSidW, OWNER_SECURITY_INFORMATION, PSECURITY_DESCRIPTOR, PSID, SID_NAME_USE,
 };
 use windows::Win32::Storage::FileSystem::DeleteFileW;
-use windows::Win32::System::RestartManager::{
-    CCH_RM_SESSION_KEY, RM_PROCESS_INFO, RmEndSession, RmGetList, RmRegisterResources, RmStartSession,
-};
-use windows::Win32::System::Threading::{
-    OpenProcess, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION, QueryFullProcessImageNameW,
-};
 use windows::core::{HSTRING, PCWSTR, PWSTR};
-
-use super::OwnedHandle;
 
 const STATUS_ACCESS_DENIED: NTSTATUS = NTSTATUS(0xC000_0022_u32 as i32);
 const STATUS_SHARING_VIOLATION: NTSTATUS = NTSTATUS(0xC000_0043_u32 as i32);
@@ -86,90 +78,6 @@ fn classify(status: NTSTATUS, error: &io::Error) -> DeleteFailure {
             Some(code) if code == ERROR_SHARING_VIOLATION.0 || code == ERROR_LOCK_VIOLATION.0 => DeleteFailure::InUse,
             _ => DeleteFailure::Other,
         },
-    }
-}
-
-/// Процесс, который держит файл открытым.
-#[derive(Debug)]
-pub struct LockingProcess {
-    pub pid: u32,
-    /// Имя исполняемого файла (например, `chrome.exe`) или название приложения.
-    pub name: String,
-    /// Короткое имя службы, если файл держит служба Windows.
-    pub service: Option<String>,
-}
-
-/// Процессы, которые держат файл открытым или загрузили его как библиотеку.
-///
-/// Работает через Restart Manager — тот же механизм, что и окно «Файл уже используется»
-/// в проводнике. Вызов медленный (десятки миллисекунд), поэтому не стоит делать его для каждого файла.
-pub fn locking_processes(path: &Path) -> io::Result<Vec<LockingProcess>> {
-    let session = RestartManagerSession::start()?;
-
-    let file = HSTRING::from(path.as_os_str());
-    let files = [PCWSTR(file.as_ptr())];
-    unsafe { RmRegisterResources(session.0, Some(&files), None, None) }.ok()?;
-
-    // Сначала узнаём количество процессов, затем получаем список.
-    // Между вызовами список может вырасти, поэтому повторяем, пока не поместится.
-    let mut infos: Vec<RM_PROCESS_INFO> = Vec::new();
-    loop {
-        let mut needed = 0;
-        let mut count = infos.len() as u32;
-        let mut reboot_reasons = 0;
-        let buffer = (!infos.is_empty()).then_some(infos.as_mut_ptr());
-        let result = unsafe { RmGetList(session.0, &mut needed, &mut count, buffer, &mut reboot_reasons) };
-
-        if result == ERROR_MORE_DATA {
-            infos.resize(needed as usize, RM_PROCESS_INFO::default());
-            continue;
-        }
-        result.ok()?;
-        infos.truncate(count as usize);
-        break;
-    }
-
-    Ok(infos.iter().map(locking_process).collect())
-}
-
-fn locking_process(info: &RM_PROCESS_INFO) -> LockingProcess {
-    let pid = info.Process.dwProcessId;
-    let service = from_wide(&info.strServiceShortName);
-    LockingProcess {
-        pid,
-        name: process_exe_name(pid).unwrap_or_else(|| from_wide(&info.strAppName)),
-        service: (!service.is_empty()).then_some(service),
-    }
-}
-
-/// Имя исполняемого файла процесса, например `chrome.exe`.
-fn process_exe_name(pid: u32) -> Option<String> {
-    let process = OwnedHandle(unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid) }.ok()?);
-    let mut buffer = [0u16; 1024];
-    let mut length = buffer.len() as u32;
-    unsafe { QueryFullProcessImageNameW(process.0, PROCESS_NAME_WIN32, PWSTR(buffer.as_mut_ptr()), &mut length) }
-        .ok()?;
-    let full_path = PathBuf::from(String::from_utf16_lossy(&buffer[..length as usize]));
-    Some(full_path.file_name()?.to_string_lossy().into_owned())
-}
-
-/// Сеанс Restart Manager, который автоматически закрывается.
-struct RestartManagerSession(u32);
-
-impl RestartManagerSession {
-    fn start() -> io::Result<Self> {
-        let mut handle = 0;
-        let mut key = [0u16; CCH_RM_SESSION_KEY as usize + 1];
-        unsafe { RmStartSession(&mut handle, None, PWSTR(key.as_mut_ptr())) }.ok()?;
-        Ok(Self(handle))
-    }
-}
-
-impl Drop for RestartManagerSession {
-    fn drop(&mut self) {
-        unsafe {
-            let _ = RmEndSession(self.0);
-        }
     }
 }
 
@@ -250,9 +158,9 @@ mod tests {
         let error = delete_file(&path).expect_err("занятый файл не должен удаляться");
         assert_eq!(error.failure(), DeleteFailure::InUse);
 
-        let lockers = locking_processes(&path).unwrap();
+        let lockers = crate::system::restart_manager::apps_using(&path).unwrap();
         assert!(
-            lockers.iter().any(|process| process.pid == std::process::id()),
+            lockers.iter().any(|app| app.process.pid == std::process::id()),
             "в списке нет текущего процесса: {lockers:?}"
         );
 
