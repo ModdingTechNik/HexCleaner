@@ -9,8 +9,8 @@ use std::time::Duration;
 
 use eframe::egui::collapsing_header::CollapsingState;
 use eframe::egui::{
-    self, Align, Button, CentralPanel, Checkbox, Color32, ComboBox, Grid, Id, Key, Label, Layout, Modal, Panel, RichText,
-    ScrollArea, TextEdit, Ui, vec2,
+    self, Align, Button, CentralPanel, Checkbox, Color32, ComboBox, Grid, Id, Key, Label, Layout, Modal, Panel,
+    ProgressBar, RichText, ScrollArea, TextEdit, Ui, vec2,
 };
 
 use hexcleaner::catalog::{self, CleanupTask, Safety};
@@ -26,6 +26,7 @@ use hexcleaner::system::notification::{self, Notification};
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 use hexcleaner::t;
 
+use crate::progress::{CleanupProgress, TaskProgress, cleanup_progress};
 use crate::widgets::{dot, dot_atom, shield_atom, shield_icon};
 
 /// Цвета результатов, подобранные под тёмную и светлую темы.
@@ -123,6 +124,11 @@ pub struct HexCleanerApp {
     /// пока не придёт следующее уведомление или не закроется программа: если убрать
     /// значок раньше, Windows уберёт и само сообщение.
     notification: Option<Notification>,
+    /// Итоги последнего анализа по пунктам (индексы как у `tasks`): из них считается
+    /// прогресс следующей очистки. После очистки устаревают и сбрасываются.
+    analysis: Vec<Option<TaskReport>>,
+    /// Итоги анализа для пунктов текущей очистки; у остальных пунктов — `None`.
+    expected: Vec<Option<TaskReport>>,
 }
 
 /// Этап проверки программ, мешающих очистке.
@@ -153,8 +159,9 @@ impl HexCleanerApp {
         use_system_font(&cc.egui_ctx);
 
         let tasks = catalog::all_tasks();
+        let task_count = tasks.len();
         let mut app = Self {
-            task_states: vec![TaskState::Idle; tasks.len()],
+            task_states: vec![TaskState::Idle; task_count],
             tasks: Arc::new(tasks),
             settings,
             is_admin,
@@ -168,6 +175,8 @@ impl HexCleanerApp {
             programs_check: ProgramsCheck::Idle,
             window: None,
             notification: None,
+            analysis: vec![None; task_count],
+            expected: vec![None; task_count],
         };
         app.refresh_languages();
         if let Some(error) = language_error {
@@ -215,6 +224,15 @@ impl HexCleanerApp {
     /// Запускает очистку или анализ отмеченных пунктов. Перед очисткой закрывает
     /// программы `close_programs` и, если `restart_programs`, после очистки запускает их снова.
     fn start(&mut self, mode: Mode, close_programs: Vec<String>, restart_programs: bool) {
+        // Очистке, начатой после анализа, известно, сколько файлов предстоит удалить.
+        let selected = self.selected_indices();
+        self.expected = (0..self.tasks.len())
+            .map(|index| match mode {
+                Mode::Clean if selected.contains(&index) && self.is_available(&self.tasks[index]) => self.analysis[index],
+                _ => None,
+            })
+            .collect();
+
         self.task_states.fill(TaskState::Idle);
         self.mode = mode;
         self.status = Status::Running(mode);
@@ -225,7 +243,7 @@ impl HexCleanerApp {
             close_programs,
             restart_programs,
         };
-        self.job = Some(CleanupJob::start(Arc::clone(&self.tasks), self.selected_indices(), options));
+        self.job = Some(CleanupJob::start(Arc::clone(&self.tasks), selected, options));
     }
 
     /// Кнопка «Начать очистку»: сначала ищем программы, которые мешают очистке.
@@ -385,6 +403,7 @@ impl HexCleanerApp {
                     self.status = Status::Finished { mode: self.mode, total, cancelled };
                     self.last_log = Some(log_path);
                     finished = true;
+                    self.remember_analysis(cancelled);
                     let (files, size) = (total.deleted_files, format_size(total.freed_bytes));
                     let text = match (self.mode, cancelled) {
                         (Mode::Clean, false) => t!("notify.clean_done", files = files, size = size),
@@ -422,6 +441,36 @@ impl HexCleanerApp {
         // Предыдущее уведомление заменяем новым: значок в области уведомлений у окна один.
         self.notification = None;
         self.notification = Notification::show(window, &t!("app.name"), text);
+    }
+
+    /// После анализа запоминает его итоги для прогресса следующей очистки,
+    /// после очистки — сбрасывает: найденного анализом уже нет.
+    fn remember_analysis(&mut self, cancelled: bool) {
+        match self.mode {
+            Mode::Analyze if !cancelled => {
+                self.analysis = self
+                    .task_states
+                    .iter()
+                    .map(|state| match state {
+                        TaskState::Done(result) => Some(result.report),
+                        _ => None,
+                    })
+                    .collect();
+            }
+            Mode::Analyze => {}
+            Mode::Clean => self.analysis.fill(None),
+        }
+    }
+
+    /// Ход очистки, если она начата после анализа.
+    fn cleanup_progress(&self) -> Option<CleanupProgress> {
+        let states = self.task_states.iter().map(|state| match state {
+            TaskState::Idle => TaskProgress::NotStarted,
+            TaskState::Running(report) => TaskProgress::Running(*report),
+            TaskState::Done(result) => TaskProgress::Finished(result.report),
+            TaskState::Skipped => TaskProgress::Finished(TaskReport::default()),
+        });
+        cleanup_progress(states.zip(self.expected.iter().copied()))
     }
 
     /// Сумма по всем пунктам — для строки состояния во время очистки.
@@ -715,16 +764,26 @@ impl HexCleanerApp {
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
             // Отступ под полосу прокрутки, чтобы она не закрывала цифры.
             ui.add_space(ui.spacing().scroll.bar_width + 4.0);
-            Self::task_state_label(ui, &self.task_states[index], result_color);
+            Self::task_state_label(ui, &self.task_states[index], self.expected[index], result_color);
         });
     }
 
     /// Итог пункта справа в строке: счётчики, пояснение или «пропущено».
-    fn task_state_label(ui: &mut Ui, state: &TaskState, result_color: Color32) {
+    /// `expected` — итог анализа этого пункта, если очистка начата после анализа.
+    fn task_state_label(ui: &mut Ui, state: &TaskState, expected: Option<TaskReport>, result_color: Color32) {
         match state {
             TaskState::Idle => {}
             TaskState::Running(report) => {
-                ui.label(report.summary());
+                let text = match expected {
+                    Some(expected) => t!(
+                        "progress.task",
+                        files = report.deleted_files,
+                        total = expected.deleted_files,
+                        size = format_size(report.freed_bytes),
+                    ),
+                    None => report.summary(),
+                };
+                ui.label(text);
                 ui.spinner();
             }
             TaskState::Done(TaskResult { note: Some(note), .. }) => {
@@ -803,6 +862,17 @@ impl HexCleanerApp {
                     ui.spinner();
                     ui.label(text);
                 });
+            }
+            Status::Running(Mode::Clean) if let Some(progress) = self.cleanup_progress() => {
+                let text = t!(
+                    "progress.overall",
+                    percent = (progress.fraction * 100.0).round() as u32,
+                    files = progress.deleted_files,
+                    total = progress.expected_files,
+                    size = format_size(progress.freed_bytes),
+                    total_size = format_size(progress.expected_bytes),
+                );
+                ui.add(ProgressBar::new(progress.fraction).text(text).animate(true));
             }
             Status::Running(mode) => {
                 let summary = self.running_total().summary();

@@ -76,6 +76,9 @@
     "notify.clean_done": "Cleanup complete: {files} files deleted, {size} freed.",
     "notify.analysis_done": "Analysis complete: {files} files found, {size} can be freed.",
 
+    "progress.overall": "{percent}% · {files} of {total} files deleted · {size} of {total_size} freed",
+    "progress.task": "{files} of {total} deleted · {size}",
+
     "language.not_found": "language file not found",
     "language.invalid": "error in file {file}: {error}",
 

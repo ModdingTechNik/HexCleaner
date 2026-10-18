@@ -76,6 +76,9 @@
     "notify.clean_done": "Очистка завершена: удалено файлов {files}, освобождено {size}.",
     "notify.analysis_done": "Анализ завершён: найдено файлов {files}, можно освободить {size}.",
 
+    "progress.overall": "{percent}% · удалено файлов {files} из {total} · освобождено {size} из {total_size}",
+    "progress.task": "удалено {files} из {total} · {size}",
+
     "language.not_found": "файл языка не найден",
     "language.invalid": "ошибка в файле {file}: {error}",
 
