@@ -12,7 +12,7 @@
     "header.theme.hint": "Тема оформления",
     "header.language.hint": "Язык интерфейса",
     "header.languages_folder": "Папка языков…",
-    "header.languages_folder.hint": "Положите сюда свой файл перевода (*.json) — он появится в этом списке. Образцы ru.json и en.json уже лежат там.",
+    "header.languages_folder.hint": "Положите сюда свой файл перевода (*.json) — он появится в этом списке. Образцы ru.json, uk.json и en.json уже лежат там.",
 
     "theme.dark": "Тёмная",
     "theme.light": "Светлая",

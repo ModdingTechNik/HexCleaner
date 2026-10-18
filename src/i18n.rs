@@ -35,8 +35,9 @@ macro_rules! t {
 }
 
 /// Встроенные языки: код (он же имя файла) и содержимое JSON.
-const BUILT_IN: [(&str, &str); 2] = [
+const BUILT_IN: [(&str, &str); 3] = [
     ("ru", include_str!("../languages/ru.json")),
+    ("uk", include_str!("../languages/uk.json")),
     ("en", include_str!("../languages/en.json")),
 ];
 
@@ -140,7 +141,12 @@ pub fn select_language(code: Option<&str>) -> Option<String> {
 /// Язык интерфейса Windows, если для него есть встроенный перевод, иначе английский.
 pub fn system_language() -> &'static str {
     const LANG_RUSSIAN: u16 = 0x19;
-    if crate::system::locale::ui_language_primary_id() == LANG_RUSSIAN { "ru" } else { "en" }
+    const LANG_UKRAINIAN: u16 = 0x22;
+    match crate::system::locale::ui_language_primary_id() {
+        LANG_RUSSIAN => "ru",
+        LANG_UKRAINIAN => "uk",
+        _ => "en",
+    }
 }
 
 /// Папка с файлами переводов.
@@ -283,7 +289,9 @@ mod tests {
 
     #[test]
     fn built_in_languages_have_the_same_keys() {
-        assert_eq!(keys("ru"), keys("en"));
+        for (code, _) in BUILT_IN {
+            assert_eq!(keys(code), keys("ru"), "в языке {code} другой набор ключей");
+        }
     }
 
     #[test]

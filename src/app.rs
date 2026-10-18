@@ -9,7 +9,7 @@ use std::time::Duration;
 
 use eframe::egui::collapsing_header::CollapsingState;
 use eframe::egui::{
-    self, Align, Button, CentralPanel, Checkbox, Color32, ComboBox, Grid, Id, Key, Layout, Modal, Panel, RichText,
+    self, Align, Button, CentralPanel, Checkbox, Color32, ComboBox, Grid, Id, Key, Label, Layout, Modal, Panel, RichText,
     ScrollArea, TextEdit, Ui, vec2,
 };
 
@@ -409,8 +409,9 @@ impl HexCleanerApp {
     fn header(&mut self, ui: &mut Ui) {
         ui.horizontal(|ui| {
             ui.heading(RichText::new(t!("app.name")).strong());
-            ui.label(RichText::new(t!("header.subtitle")).weak());
 
+            // Сначала элементы справа, затем подзаголовок в оставшемся месте: на языках
+            // с длинными надписями он обрежется многоточием, а не залезет под кнопки.
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 if self.is_admin {
                     // Как в Windows Terminal: щит показывает, что программа работает с правами администратора.
@@ -431,6 +432,10 @@ impl HexCleanerApp {
                 ui.add_enabled_ui(!self.is_running(), |ui| {
                     self.theme_selector(ui);
                     self.language_selector(ui);
+                });
+
+                ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
+                    ui.add(Label::new(RichText::new(t!("header.subtitle")).weak()).truncate());
                 });
             });
         });

@@ -12,7 +12,7 @@
     "header.theme.hint": "Color theme",
     "header.language.hint": "Interface language",
     "header.languages_folder": "Languages folder…",
-    "header.languages_folder.hint": "Put your own translation file (*.json) here and it will appear in this list. Samples ru.json and en.json are already there.",
+    "header.languages_folder.hint": "Put your own translation file (*.json) here and it will appear in this list. Samples ru.json, uk.json and en.json are already there.",
 
     "theme.dark": "Dark",
     "theme.light": "Light",
