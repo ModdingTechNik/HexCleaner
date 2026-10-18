@@ -13,6 +13,7 @@ use std::time::{Duration, SystemTime};
 
 use super::TaskRun;
 use crate::system::delete;
+use crate::t;
 
 const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
 
@@ -46,7 +47,7 @@ pub fn clear_directory(run: &mut TaskRun, dir: &Path, min_age: Option<Duration>)
         };
 
         if is_link(&metadata) {
-            run.skipped(&path, "ссылка на другую папку, не трогаем");
+            run.skipped(&path, &t!("skip.link"));
             is_empty = false;
         } else if metadata.is_dir() {
             // Возраст проверяем до очистки: после удаления файлов дата папки обновится.

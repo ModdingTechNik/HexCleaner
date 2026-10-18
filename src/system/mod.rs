@@ -3,6 +3,7 @@
 pub mod admin;
 pub mod delete;
 pub mod event_log;
+pub mod locale;
 pub mod memory;
 pub mod services;
 

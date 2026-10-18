@@ -35,19 +35,15 @@ pub fn is_elevated() -> bool {
 
 /// Запускает новый экземпляр программы с запросом прав администратора.
 ///
-/// Возвращает ошибку, если пользователь отказался в окне UAC.
+/// Возвращает `false`, если пользователь отказался в окне UAC.
 /// При успехе текущий экземпляр нужно закрыть.
-pub fn restart_as_admin() -> Result<(), String> {
-    let exe = std::env::current_exe().map_err(|error| error.to_string())?;
+pub fn restart_as_admin() -> bool {
+    let Ok(exe) = std::env::current_exe() else { return false };
 
     let result = unsafe {
         ShellExecuteW(None, w!("runas"), &HSTRING::from(exe.as_os_str()), None, None, SW_SHOWNORMAL)
     };
 
     // По документации ShellExecute значение больше 32 означает успех.
-    if result.0 as usize > 32 {
-        Ok(())
-    } else {
-        Err("Не удалось получить права администратора (запрос UAC отклонён).".to_owned())
-    }
+    result.0 as usize > 32
 }

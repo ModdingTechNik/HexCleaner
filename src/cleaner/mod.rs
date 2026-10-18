@@ -23,6 +23,7 @@ use std::time::{Duration, Instant};
 use crate::catalog::{Action, CleanupTask};
 use crate::system::delete::DeleteError;
 use crate::system::{event_log, memory, services};
+use crate::t;
 
 pub use log::logs_directory;
 use log::CleanupLog;
@@ -115,15 +116,11 @@ fn run_cleanup(
     let mut log = match CleanupLog::create(options.mode, options.compress_old_logs) {
         Ok(log) => log,
         Err(error) => {
-            let _ = events.send(CleanupEvent::Failed(format!("Не удалось создать журнал: {error}")));
+            let _ = events.send(CleanupEvent::Failed(t!("engine.log_failed", error = error)));
             return;
         }
     };
-    log.line(if is_admin {
-        "Права администратора: есть"
-    } else {
-        "Права администратора: нет — пункты, требующие их, будут пропущены"
-    });
+    log.line(&if is_admin { t!("log.admin_yes") } else { t!("log.admin_no") });
 
     let mut total = TaskReport::default();
     for &index in selected {
@@ -131,10 +128,10 @@ fn run_cleanup(
             break;
         }
         let task = &tasks[index];
-        log.task_started(task.title);
+        log.task_started(&task.title());
 
         if task.requires_admin && !is_admin {
-            log.line("Пропущено: нужны права администратора");
+            log.line(&t!("log.skipped_needs_admin"));
             let _ = events.send(CleanupEvent::TaskSkipped(index));
             continue;
         }
@@ -162,7 +159,7 @@ pub struct TaskRun<'a> {
     /// Разбивка по папкам; `current_location` — папка, которая обрабатывается сейчас.
     locations: Vec<Location>,
     current_location: Option<usize>,
-    note: Option<&'static str>,
+    note: Option<String>,
     log: &'a mut CleanupLog,
     events: &'a Sender<CleanupEvent>,
     cancel: &'a AtomicBool,
@@ -259,9 +256,9 @@ impl<'a> TaskRun<'a> {
                 continue;
             }
             if files::is_link(&metadata) {
-                self.skipped(&dir, "ссылка на другую папку, не трогаем");
+                self.skipped(&dir, &t!("skip.link"));
             } else if paths::is_protected(&dir) {
-                self.skipped(&dir, "защищённая папка, не трогаем");
+                self.skipped(&dir, &t!("skip.protected"));
             } else {
                 result.push(dir);
             }
@@ -284,20 +281,18 @@ impl<'a> TaskRun<'a> {
         let result = event_log::clear_all(|channel, result| match result {
             Ok(()) => {
                 cleared += 1;
-                self.log.line(&format!("  очищен журнал событий  {channel}"));
+                self.log.line(&t!("log.event_log_cleared", channel = channel));
             }
             // Аналитические и отладочные журналы нельзя очистить, пока они включены, — это нормально.
             Err(_) => not_cleared += 1,
         });
         if let Err(error) = result {
-            self.log.line(&format!("  не удалось получить список журналов событий: {error}"));
+            self.log.line(&t!("log.event_logs_list_failed", error = error));
         }
 
         let size_after = files::directory_size(&logs_dir);
         self.add_freed_bytes(size_before.saturating_sub(size_after));
-        self.log.line(&format!(
-            "  журналов событий очищено: {cleared}, пропущено (активные или защищённые): {not_cleared}"
-        ));
+        self.log.line(&t!("log.event_logs_summary", cleared = cleared, skipped = not_cleared));
     }
 
     /// Оценка для анализа: очищенный журнал событий ужимается до минимального размера
@@ -313,16 +308,16 @@ impl<'a> TaskRun<'a> {
 
     fn trim_process_memory(&mut self) {
         if self.is_analysis() {
-            self.note = Some("объём памяти известен только после очистки");
+            self.note = Some(t!("note.memory_in_analysis"));
             return;
         }
         let result = memory::trim_all_working_sets();
         self.report.freed_memory += result.freed_bytes;
-        self.log.line(&format!(
-            "  обработано процессов: {}, недоступно: {}, освобождено: {}",
-            result.trimmed,
-            result.inaccessible,
-            format_size(result.freed_bytes)
+        self.log.line(&t!(
+            "log.memory_summary",
+            trimmed = result.trimmed,
+            inaccessible = result.inaccessible,
+            size = format_size(result.freed_bytes),
         ));
     }
 
@@ -332,11 +327,11 @@ impl<'a> TaskRun<'a> {
         for &name in names {
             match services::stop(name) {
                 Ok(true) => {
-                    self.log.line(&format!("  служба {name} остановлена"));
+                    self.log.line(&t!("log.service_stopped", name = name));
                     stopped.push(name);
                 }
                 Ok(false) => {}
-                Err(error) => self.log.line(&format!("  не удалось остановить службу {name}: {error}")),
+                Err(error) => self.log.line(&t!("log.service_stop_failed", name = name, error = error)),
             }
         }
         stopped
@@ -345,8 +340,8 @@ impl<'a> TaskRun<'a> {
     fn start_services(&mut self, names: &[&str]) {
         for &name in names {
             match services::start(name) {
-                Ok(()) => self.log.line(&format!("  служба {name} запущена")),
-                Err(error) => self.log.line(&format!("  не удалось запустить службу {name}: {error}")),
+                Ok(()) => self.log.line(&t!("log.service_started", name = name)),
+                Err(error) => self.log.line(&t!("log.service_start_failed", name = name, error = error)),
             }
         }
     }

@@ -7,20 +7,46 @@ use std::time::Duration;
 
 use eframe::egui::collapsing_header::CollapsingState;
 use eframe::egui::{
-    self, Align, Button, CentralPanel, Checkbox, Color32, Grid, Layout, Panel, RichText, ScrollArea, Ui, vec2,
+    self, Align, Button, CentralPanel, Checkbox, Color32, ComboBox, Grid, Layout, Panel, RichText, ScrollArea, Ui,
+    vec2,
 };
 
 use crate::catalog::{self, CleanupTask};
 use crate::cleaner::{
     self, CleanupEvent, CleanupJob, CleanupOptions, Location, Mode, TaskReport, TaskResult, format_size,
 };
-use crate::settings::Settings;
+use crate::i18n::{self, LanguageInfo};
+use crate::settings::{Settings, Theme};
 use crate::system::admin;
+use crate::t;
 use crate::widgets::{shield_atom, shield_icon};
 
-const ERROR_COLOR: Color32 = Color32::from_rgb(0xE5, 0x6B, 0x6B);
-const SUCCESS_COLOR: Color32 = Color32::from_rgb(0x7C, 0xC4, 0x7F);
-const FOUND_COLOR: Color32 = Color32::from_rgb(0xE8, 0xB9, 0x4A);
+/// Цвета результатов, подобранные под тёмную и светлую темы.
+struct Palette {
+    /// Итоги очистки.
+    success: Color32,
+    /// Итоги анализа.
+    found: Color32,
+    error: Color32,
+}
+
+impl Palette {
+    fn of(ui: &Ui) -> Self {
+        if ui.visuals().dark_mode {
+            Self {
+                success: Color32::from_rgb(0x7C, 0xC4, 0x7F),
+                found: Color32::from_rgb(0xE8, 0xB9, 0x4A),
+                error: Color32::from_rgb(0xE5, 0x6B, 0x6B),
+            }
+        } else {
+            Self {
+                success: Color32::from_rgb(0x2E, 0x7D, 0x32),
+                found: Color32::from_rgb(0xA8, 0x5F, 0x00),
+                error: Color32::from_rgb(0xC6, 0x28, 0x28),
+            }
+        }
+    }
+}
 
 /// Сколько папок показывать в разбивке пункта; полный список — в журнале.
 const MAX_SHOWN_LOCATIONS: usize = 15;
@@ -55,24 +81,38 @@ pub struct HexCleanerApp {
     mode: Mode,
     status: Status,
     last_log: Option<PathBuf>,
+    /// Языки для списка выбора: встроенные и найденные в папке языков.
+    languages: Vec<LanguageInfo>,
 }
 
 impl HexCleanerApp {
-    pub fn new(cc: &eframe::CreationContext, is_admin: bool) -> Self {
-        cc.egui_ctx.set_theme(egui::Theme::Dark);
+    /// `language_error` — что пошло не так при включении сохранённого языка (показывается внизу окна).
+    pub fn new(
+        cc: &eframe::CreationContext,
+        settings: Settings,
+        is_admin: bool,
+        language_error: Option<String>,
+    ) -> Self {
+        cc.egui_ctx.set_theme(egui_theme(settings.theme));
         use_system_font(&cc.egui_ctx);
 
         let tasks = catalog::all_tasks();
-        Self {
+        let mut app = Self {
             task_states: vec![TaskState::Idle; tasks.len()],
             tasks: Arc::new(tasks),
-            settings: Settings::load(),
+            settings,
             is_admin,
             job: None,
             mode: Mode::Clean,
             status: Status::Ready,
             last_log: None,
+            languages: Vec::new(),
+        };
+        app.refresh_languages();
+        if let Some(error) = language_error {
+            app.status = Status::Error(error);
         }
+        app
     }
 
     fn is_running(&self) -> bool {
@@ -106,10 +146,42 @@ impl HexCleanerApp {
 
     fn restart_as_admin(&mut self, ctx: &egui::Context) {
         self.settings.save();
-        match admin::restart_as_admin() {
-            Ok(()) => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
-            Err(message) => self.status = Status::Error(message),
+        if admin::restart_as_admin() {
+            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+        } else {
+            self.status = Status::Error(t!("status.elevation_failed"));
         }
+    }
+
+    /// Перечитывает список языков, чтобы в нём появились новые файлы из папки языков.
+    fn refresh_languages(&mut self) {
+        let (languages, broken_files) = i18n::available_languages();
+        self.languages = languages;
+        if !broken_files.is_empty() {
+            self.status = Status::Error(t!("status.broken_language_files", files = broken_files.join(", ")));
+        }
+    }
+
+    fn change_language(&mut self, ctx: &egui::Context, code: String) {
+        match i18n::set_language(&code) {
+            Ok(()) => {
+                self.settings.language = Some(code);
+                self.settings.save();
+                ctx.send_viewport_cmd(egui::ViewportCommand::Title(window_title(self.is_admin)));
+            }
+            Err(error) => self.status = Status::Error(t!("status.language_failed", code = code, error = error)),
+        }
+    }
+
+    fn change_theme(&mut self, ctx: &egui::Context, theme: Theme) {
+        self.settings.theme = theme;
+        self.settings.save();
+        ctx.set_theme(egui_theme(theme));
+    }
+
+    /// Код языка, который сейчас включён.
+    fn current_language(&self) -> String {
+        self.settings.language.clone().unwrap_or_else(|| i18n::system_language().to_owned())
     }
 
     /// Выбрать или снять все пункты, доступные при текущих правах.
@@ -171,25 +243,83 @@ impl HexCleanerApp {
 
     fn header(&mut self, ui: &mut Ui) {
         ui.horizontal(|ui| {
-            ui.heading(RichText::new("HexCleaner").strong());
-            ui.label(RichText::new("очистка мусора и кэшей Windows").weak());
+            ui.heading(RichText::new(t!("app.name")).strong());
+            ui.label(RichText::new(t!("header.subtitle")).weak());
 
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 if self.is_admin {
                     // Как в Windows Terminal: щит показывает, что программа работает с правами администратора.
-                    ui.label("Администратор");
+                    ui.label(t!("header.admin"));
                     shield_icon(ui, 18.0);
                 } else {
-                    let button = Button::new((shield_atom(16.0), "Запустить от администратора"));
+                    let button = Button::new((shield_atom(16.0), t!("header.run_as_admin")));
                     let response = ui
                         .add_enabled(!self.is_running(), button)
-                        .on_hover_text("Перезапустить программу с правами администратора (UAC).");
+                        .on_hover_text(t!("header.run_as_admin.hint"));
                     if response.clicked() {
                         self.restart_as_admin(ui.ctx());
                     }
                 }
+
+                ui.separator();
+                // Во время очистки язык не меняем: журнал пишется на одном языке.
+                ui.add_enabled_ui(!self.is_running(), |ui| {
+                    self.theme_selector(ui);
+                    self.language_selector(ui);
+                });
             });
         });
+    }
+
+    fn theme_selector(&mut self, ui: &mut Ui) {
+        let mut theme = self.settings.theme;
+        ComboBox::from_id_salt("theme")
+            .selected_text(theme_name(theme))
+            .show_ui(ui, |ui| {
+                for option in [Theme::Dark, Theme::Light, Theme::System] {
+                    ui.selectable_value(&mut theme, option, theme_name(option));
+                }
+            })
+            .response
+            .on_hover_text(t!("header.theme.hint"));
+
+        if theme != self.settings.theme {
+            self.change_theme(ui.ctx(), theme);
+        }
+    }
+
+    fn language_selector(&mut self, ui: &mut Ui) {
+        let current = self.current_language();
+        let current_name = self
+            .languages
+            .iter()
+            .find(|language| language.code == current)
+            .map_or(current.clone(), |language| language.name.clone());
+
+        let mut chosen = None;
+        let combo = ComboBox::from_id_salt("language").selected_text(current_name).show_ui(ui, |ui| {
+            for language in &self.languages {
+                if ui.selectable_label(language.code == current, &language.name).clicked() {
+                    chosen = Some(language.code.clone());
+                }
+            }
+            ui.separator();
+            let folder = ui.button(t!("header.languages_folder")).on_hover_text(t!("header.languages_folder.hint"));
+            if folder.clicked() {
+                i18n::export_built_in_languages();
+                open_in_explorer(&i18n::languages_directory());
+            }
+        });
+
+        // Список перечитывается при каждом открытии — так подхватываются новые файлы переводов.
+        if combo.response.clicked() {
+            self.refresh_languages();
+        }
+        combo.response.on_hover_text(t!("header.language.hint"));
+
+        if let Some(code) = chosen {
+            self.change_language(ui.ctx(), code);
+        }
     }
 
     fn task_list(&mut self, ui: &mut Ui) {
@@ -200,12 +330,12 @@ impl HexCleanerApp {
             .all(|task| self.settings.is_selected(task.id));
 
         ui.horizontal(|ui| {
-            let label = if all_selected { "Снять все галочки" } else { "Отметить все" };
+            let label = if all_selected { t!("list.unselect_all") } else { t!("list.select_all") };
             if ui.add_enabled(!self.is_running(), Button::new(label)).clicked() {
                 self.set_all_available(!all_selected);
             }
             if !self.is_admin {
-                ui.label(RichText::new("Пункты со щитом требуют прав администратора и будут пропущены.").weak());
+                ui.label(RichText::new(t!("list.admin_hint")).weak());
             }
         });
         ui.separator();
@@ -244,28 +374,30 @@ impl HexCleanerApp {
     fn task_row(&mut self, ui: &mut Ui, index: usize, task: &CleanupTask) {
         let mut selected = self.settings.is_selected(task.id);
         let checkbox = if task.requires_admin {
-            Checkbox::new(&mut selected, (task.title, shield_atom(14.0)))
+            Checkbox::new(&mut selected, (task.title(), shield_atom(14.0)))
         } else {
-            Checkbox::new(&mut selected, task.title)
+            Checkbox::new(&mut selected, task.title())
         };
 
         let enabled = self.is_available(task) && !self.is_running();
+        let description = task.description();
         let response = ui
             .add_enabled(enabled, checkbox)
-            .on_hover_text(task.description)
+            .on_hover_text(&description)
             .on_disabled_hover_text(if self.is_available(task) {
-                task.description.to_owned()
+                description.clone()
             } else {
-                format!("Нужны права администратора.\n\n{}", task.description)
+                t!("list.needs_admin", description = description)
             });
         if response.changed() {
             self.settings.set_selected(task.id, selected);
             self.settings.save();
         }
 
+        let palette = Palette::of(ui);
         let result_color = match self.mode {
-            Mode::Clean => SUCCESS_COLOR,
-            Mode::Analyze => FOUND_COLOR,
+            Mode::Clean => palette.success,
+            Mode::Analyze => palette.found,
         };
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
             // Отступ под полосу прокрутки, чтобы она не закрывала цифры.
@@ -283,13 +415,13 @@ impl HexCleanerApp {
                 ui.spinner();
             }
             TaskState::Done(TaskResult { note: Some(note), .. }) => {
-                ui.label(RichText::new(*note).weak());
+                ui.label(RichText::new(note).weak());
             }
             TaskState::Done(result) => {
                 ui.label(RichText::new(result.report.summary()).color(result_color));
             }
             TaskState::Skipped => {
-                ui.label(RichText::new("пропущено: нужны права администратора").weak());
+                ui.label(RichText::new(t!("list.skipped")).weak());
             }
         }
     }
@@ -298,7 +430,7 @@ impl HexCleanerApp {
         ui.add_space(6.0);
         ui.horizontal(|ui| {
             if let Some(job) = &self.job {
-                if ui.add(Button::new("Остановить").min_size(vec2(150.0, 30.0))).clicked() {
+                if ui.add(Button::new(t!("footer.stop")).min_size(vec2(150.0, 30.0))).clicked() {
                     job.cancel();
                 }
             } else {
@@ -307,36 +439,32 @@ impl HexCleanerApp {
                     .iter()
                     .any(|task| self.is_available(task) && self.settings.is_selected(task.id));
 
-                let analyze = Button::new("Анализ").min_size(vec2(110.0, 30.0));
-                let response = ui
-                    .add_enabled(has_selection, analyze)
-                    .on_hover_text("Показать, сколько мусора и в каких папках будет удалено. Ничего не удаляет.");
+                let analyze = Button::new(t!("footer.analyze")).min_size(vec2(110.0, 30.0));
+                let response = ui.add_enabled(has_selection, analyze).on_hover_text(t!("footer.analyze.hint"));
                 if response.clicked() {
                     self.start(Mode::Analyze);
                 }
 
-                let clean = Button::new(RichText::new("Начать очистку").strong()).min_size(vec2(150.0, 30.0));
+                let clean = Button::new(RichText::new(t!("footer.clean")).strong()).min_size(vec2(150.0, 30.0));
                 if ui.add_enabled(has_selection, clean).clicked() {
                     self.start(Mode::Clean);
                 }
             }
 
             if let Some(log_path) = &self.last_log
-                && ui.button("Открыть журнал").clicked()
+                && ui.button(t!("footer.open_log")).clicked()
             {
                 open_in_explorer(log_path);
             }
-            if ui.button("Папка журналов").clicked() {
+            if ui.button(t!("footer.logs_folder")).clicked() {
                 let dir = cleaner::logs_directory();
                 let _ = std::fs::create_dir_all(&dir);
                 open_in_explorer(&dir);
             }
 
             let enabled = !self.is_running();
-            let compress = Checkbox::new(&mut self.settings.compress_old_logs, "Сжимать прошлые журналы");
-            let response = ui
-                .add_enabled(enabled, compress)
-                .on_hover_text("Перед новой очисткой упаковывать журналы прошлых очисток в zip-архивы.");
+            let compress = Checkbox::new(&mut self.settings.compress_old_logs, t!("footer.compress_logs"));
+            let response = ui.add_enabled(enabled, compress).on_hover_text(t!("footer.compress_logs.hint"));
             if response.changed() {
                 self.settings.save();
             }
@@ -350,49 +478,45 @@ impl HexCleanerApp {
     fn status_line(&self, ui: &mut Ui) {
         match &self.status {
             Status::Ready => {
-                ui.label(
-                    RichText::new(
-                        "Отметьте нужные пункты. «Анализ» покажет, сколько мусора найдётся, ничего не удаляя.",
-                    )
-                    .weak(),
-                );
+                ui.label(RichText::new(t!("status.ready")).weak());
             }
             Status::Running(mode) => {
-                let action = match mode {
-                    Mode::Clean => "Идёт очистка",
-                    Mode::Analyze => "Идёт анализ",
+                let summary = self.running_total().summary();
+                let text = match mode {
+                    Mode::Clean => t!("status.running_clean", summary = summary),
+                    Mode::Analyze => t!("status.running_analysis", summary = summary),
                 };
                 ui.horizontal(|ui| {
                     ui.spinner();
-                    ui.label(format!("{action}… {}", self.running_total().summary()));
+                    ui.label(text);
                 });
             }
             Status::Finished { mode: Mode::Analyze, total, cancelled } => {
-                let text = format!(
-                    "{}: найдено файлов {}, можно освободить {}. Нажмите на треугольник у пункта, чтобы увидеть папки.",
-                    if *cancelled { "Анализ остановлен" } else { "Анализ завершён" },
-                    total.deleted_files,
-                    format_size(total.freed_bytes)
-                );
+                let (files, size) = (total.deleted_files, format_size(total.freed_bytes));
+                let text = if *cancelled {
+                    t!("status.analysis_stopped", files = files, size = size)
+                } else {
+                    t!("status.analysis_done", files = files, size = size)
+                };
                 ui.label(RichText::new(text).strong());
             }
             Status::Finished { mode: Mode::Clean, total, cancelled } => {
-                let mut text = format!(
-                    "{}: удалено файлов {}, освобождено {}",
-                    if *cancelled { "Остановлено" } else { "Готово" },
-                    total.deleted_files,
-                    format_size(total.freed_bytes)
-                );
+                let (files, size) = (total.deleted_files, format_size(total.freed_bytes));
+                let mut text = if *cancelled {
+                    t!("status.clean_stopped", files = files, size = size)
+                } else {
+                    t!("status.clean_done", files = files, size = size)
+                };
                 if total.freed_memory > 0 {
-                    text += &format!(", ОЗУ {}", format_size(total.freed_memory));
+                    text += &t!("status.freed_memory", size = format_size(total.freed_memory));
                 }
                 if total.failed > 0 {
-                    text += &format!(". Не удалось удалить {} (заняты или нет доступа)", total.failed);
+                    text += &t!("status.failed", count = total.failed);
                 }
                 ui.label(RichText::new(text).strong());
             }
             Status::Error(message) => {
-                ui.label(RichText::new(message).color(ERROR_COLOR));
+                ui.label(RichText::new(message).color(Palette::of(ui).error));
             }
         }
     }
@@ -417,8 +541,8 @@ fn locations_grid(ui: &mut Ui, task_id: &str, locations: &[Location]) {
     Grid::new(("locations", task_id)).num_columns(3).spacing([16.0, 2.0]).show(ui, |ui| {
         for location in locations.iter().take(MAX_SHOWN_LOCATIONS) {
             ui.label(RichText::new(format_size(location.bytes)).strong());
-            ui.label(format!("{} файлов", location.files));
-            let hint = format!("{}\n\nОткрыть папку в проводнике", location.path.display());
+            ui.label(t!("locations.files", count = location.files));
+            let hint = t!("locations.open_hint", path = location.path.display());
             if ui.link(short_path(&location.path)).on_hover_text(hint).clicked() {
                 open_in_explorer(&location.path);
             }
@@ -428,7 +552,7 @@ fn locations_grid(ui: &mut Ui, task_id: &str, locations: &[Location]) {
 
     let hidden = locations.len().saturating_sub(MAX_SHOWN_LOCATIONS);
     if hidden > 0 {
-        ui.label(RichText::new(format!("…и ещё папок: {hidden}. Полный список — в журнале.")).weak());
+        ui.label(RichText::new(t!("locations.more", count = hidden)).weak());
     }
 }
 
@@ -445,6 +569,27 @@ fn short_path(path: &Path) -> String {
         }
     }
     full
+}
+
+/// Заголовок окна на текущем языке.
+pub fn window_title(is_admin: bool) -> String {
+    if is_admin { t!("window.title_admin") } else { t!("window.title") }
+}
+
+fn theme_name(theme: Theme) -> String {
+    match theme {
+        Theme::Dark => t!("theme.dark"),
+        Theme::Light => t!("theme.light"),
+        Theme::System => t!("theme.system"),
+    }
+}
+
+fn egui_theme(theme: Theme) -> egui::ThemePreference {
+    match theme {
+        Theme::Dark => egui::ThemePreference::Dark,
+        Theme::Light => egui::ThemePreference::Light,
+        Theme::System => egui::ThemePreference::System,
+    }
 }
 
 /// Открывает файл в программе по умолчанию или папку в проводнике.

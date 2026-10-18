@@ -3,6 +3,8 @@
 use std::ops::AddAssign;
 use std::path::PathBuf;
 
+use crate::t;
+
 /// Сколько мусора найдено (или удалено) в одной папке.
 #[derive(Clone, Debug)]
 pub struct Location {
@@ -17,7 +19,7 @@ pub struct TaskResult {
     pub report: TaskReport,
     pub locations: Vec<Location>,
     /// Пояснение, если для пункта нельзя посчитать объём (например, очистка памяти при анализе).
-    pub note: Option<&'static str>,
+    pub note: Option<String>,
 }
 
 /// Итоги выполнения одного пункта (или всей очистки целиком).
@@ -43,21 +45,21 @@ impl AddAssign for TaskReport {
 }
 
 impl TaskReport {
-    /// Краткое описание для интерфейса и журнала: «128 файлов · 45.3 МБ».
+    /// Краткое описание для интерфейса и журнала: «файлов: 128 · 45.3 МБ».
     pub fn summary(&self) -> String {
         let mut parts = Vec::new();
         if self.deleted_files > 0 || self.freed_bytes > 0 {
-            parts.push(format!("{} файлов", self.deleted_files));
+            parts.push(t!("report.files", count = self.deleted_files));
             parts.push(format_size(self.freed_bytes));
         }
         if self.freed_memory > 0 {
-            parts.push(format!("ОЗУ {}", format_size(self.freed_memory)));
+            parts.push(t!("report.memory", size = format_size(self.freed_memory)));
         }
         if self.failed > 0 {
-            parts.push(format!("не удалось: {}", self.failed));
+            parts.push(t!("report.failed", count = self.failed));
         }
         if parts.is_empty() {
-            return "нечего очищать".to_owned();
+            return t!("report.nothing");
         }
         parts.join(" · ")
     }
@@ -65,7 +67,7 @@ impl TaskReport {
 
 /// Переводит размер в байтах в удобный для чтения вид: «1.5 ГБ».
 pub fn format_size(bytes: u64) -> String {
-    const UNITS: [&str; 5] = ["Б", "КБ", "МБ", "ГБ", "ТБ"];
+    const UNITS: [&str; 5] = ["unit.bytes", "unit.kilobytes", "unit.megabytes", "unit.gigabytes", "unit.terabytes"];
 
     let mut value = bytes as f64;
     let mut unit = 0;
@@ -75,9 +77,9 @@ pub fn format_size(bytes: u64) -> String {
     }
 
     if unit == 0 {
-        format!("{bytes} {}", UNITS[0])
+        format!("{bytes} {}", t!(UNITS[0]))
     } else {
-        format!("{value:.1} {}", UNITS[unit])
+        format!("{value:.1} {}", t!(UNITS[unit]))
     }
 }
 

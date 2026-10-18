@@ -15,6 +15,7 @@ use zip::{CompressionMethod, ZipWriter};
 
 use super::Mode;
 use super::report::{TaskReport, TaskResult, format_size};
+use crate::t;
 
 pub struct CleanupLog {
     path: PathBuf,
@@ -36,15 +37,16 @@ impl CleanupLog {
         }
 
         let now = chrono::Local::now();
+        let version = env!("CARGO_PKG_VERSION");
         let (prefix, title) = match mode {
-            Mode::Clean => ("cleanup", "журнал очистки"),
-            Mode::Analyze => ("analysis", "отчёт анализа (ничего не удалялось)"),
+            Mode::Clean => ("cleanup", t!("log.title_clean", version = version)),
+            Mode::Analyze => ("analysis", t!("log.title_analysis", version = version)),
         };
         let path = dir.join(format!("{prefix}_{}.log", now.format("%Y-%m-%d_%H-%M-%S")));
         let mut log = Self { writer: BufWriter::new(File::create(&path)?), path, mode };
 
-        log.line(&format!("HexCleaner {} — {title}", env!("CARGO_PKG_VERSION")));
-        log.line(&format!("Начало: {}", now.format("%d.%m.%Y %H:%M:%S")));
+        log.line(&title);
+        log.line(&t!("log.started", time = now_text()));
         Ok(log)
     }
 
@@ -63,60 +65,55 @@ impl CleanupLog {
     }
 
     pub fn deleted(&mut self, path: &Path, size: u64) {
-        self.line(&format!("  удалён     {:>10}  {}", format_size(size), path.display()));
+        let size = format!("{:>10}", format_size(size));
+        self.line(&t!("log.deleted", size = size, path = path.display()));
     }
 
-    pub fn failed(&mut self, path: &Path, error: &dyn std::fmt::Display) {
-        self.line(&format!("  ошибка     {}: {error}", path.display()));
+    pub fn failed(&mut self, path: &Path, reason: &str) {
+        self.line(&t!("log.failed", path = path.display(), reason = reason));
     }
 
     pub fn skipped(&mut self, path: &Path, reason: &str) {
-        self.line(&format!("  пропущен   {}: {reason}", path.display()));
+        self.line(&t!("log.skipped", path = path.display(), reason = reason));
     }
 
     pub fn task_finished(&mut self, result: &TaskResult) {
-        if let Some(note) = result.note {
+        if let Some(note) = &result.note {
             self.line(&format!("  {note}"));
         }
         for location in &result.locations {
-            self.line(&format!(
-                "  папка   {:>10}  {:>6} файлов  {}",
-                format_size(location.bytes),
-                location.files,
-                location.path.display()
-            ));
+            let size = format!("{:>10}", format_size(location.bytes));
+            let files = format!("{:>6}", location.files);
+            self.line(&t!("log.location", size = size, files = files, path = location.path.display()));
         }
-        let prefix = match self.mode {
-            Mode::Clean => "Итог",
-            Mode::Analyze => "Найдено",
-        };
-        self.line(&format!("{prefix}: {}", result.report.summary()));
+        let summary = result.report.summary();
+        self.line(&match self.mode {
+            Mode::Clean => t!("log.task_total", summary = summary),
+            Mode::Analyze => t!("log.task_found", summary = summary),
+        });
     }
 
     pub fn finish(&mut self, total: &TaskReport, cancelled: bool) {
         self.line("");
         if cancelled {
-            self.line("Остановлено пользователем.");
+            self.line(&t!("log.cancelled"));
         }
-        match self.mode {
-            Mode::Clean => self.line(&format!(
-                "ВСЕГО: удалено файлов {}, освобождено {}, не удалось удалить {}",
-                total.deleted_files,
-                format_size(total.freed_bytes),
-                total.failed
-            )),
-            Mode::Analyze => self.line(&format!(
-                "ВСЕГО: найдено файлов {}, можно освободить {}",
-                total.deleted_files,
-                format_size(total.freed_bytes)
-            )),
-        }
+        let size = format_size(total.freed_bytes);
+        self.line(&match self.mode {
+            Mode::Clean => t!("log.total_clean", files = total.deleted_files, size = size, failed = total.failed),
+            Mode::Analyze => t!("log.total_analysis", files = total.deleted_files, size = size),
+        });
         if total.freed_memory > 0 {
-            self.line(&format!("Освобождено оперативной памяти: {}", format_size(total.freed_memory)));
+            self.line(&t!("log.total_memory", size = format_size(total.freed_memory)));
         }
-        self.line(&format!("Конец: {}", chrono::Local::now().format("%d.%m.%Y %H:%M:%S")));
+        self.line(&t!("log.finished", time = now_text()));
         let _ = self.writer.flush();
     }
+}
+
+/// Текущие дата и время в формате языка интерфейса.
+fn now_text() -> String {
+    chrono::Local::now().format(&t!("log.datetime_format")).to_string()
 }
 
 /// Сжимает журналы прошлых очисток: `cleanup_….log` → `cleanup_….zip`.

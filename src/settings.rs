@@ -1,4 +1,4 @@
-//! Сохранение выбранных пунктов между запусками.
+//! Сохранение выбранных пунктов, языка и темы между запусками.
 //!
 //! Настройки хранятся в `%APPDATA%\HexCleaner\settings.json`. Благодаря этому выбор
 //! пунктов, требующих прав администратора, не теряется при запуске без прав
@@ -10,6 +10,17 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
+/// Тема оформления.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Theme {
+    #[default]
+    Dark,
+    Light,
+    /// Как в настройках Windows.
+    System,
+}
+
 #[derive(Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
@@ -17,11 +28,14 @@ pub struct Settings {
     selected: BTreeMap<String, bool>,
     /// Сжимать ли журналы прошлых очисток в zip-архивы.
     pub compress_old_logs: bool,
+    /// Код языка (имя файла перевода). `None` — язык Windows.
+    pub language: Option<String>,
+    pub theme: Theme,
 }
 
 impl Default for Settings {
     fn default() -> Self {
-        Self { selected: BTreeMap::new(), compress_old_logs: true }
+        Self { selected: BTreeMap::new(), compress_old_logs: true, language: None, theme: Theme::default() }
     }
 }
 

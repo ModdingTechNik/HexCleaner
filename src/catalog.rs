@@ -1,7 +1,8 @@
 //! Каталог пунктов очистки.
 //!
-//! Каждый пункт описывается декларативно: заголовок, нужны ли права администратора
-//! и список простых действий ([`Action`]). Движок очистки (`cleaner`) и интерфейс
+//! Каждый пункт описывается декларативно: идентификатор, нужны ли права администратора
+//! и список простых действий ([`Action`]). Заголовок и описание пункта берутся из файлов
+//! перевода по ключам `task.<id>.title` и `task.<id>.description`. Движок очистки (`cleaner`) и интерфейс
 //! (`app`) ничего не знают о конкретных путях — чтобы добавить новый пункт,
 //! достаточно дописать его в [`all_tasks`].
 //!
@@ -14,6 +15,8 @@
 //! Документы, сохранения игр, cookies, пароли и история браузеров не затрагиваются.
 
 use std::time::Duration;
+
+use crate::i18n;
 
 /// Временные файлы моложе этого возраста не удаляются:
 /// ими может прямо сейчас пользоваться работающий установщик или программа.
@@ -35,15 +38,24 @@ pub enum Action {
 
 /// Пункт очистки, который пользователь видит в списке.
 pub struct CleanupTask {
-    /// Стабильный идентификатор — по нему сохраняется выбор пользователя.
+    /// Стабильный идентификатор — по нему сохраняется выбор пользователя
+    /// и находятся заголовок и описание в файлах перевода.
     pub id: &'static str,
-    pub title: &'static str,
-    /// Подробности, которые показываются во всплывающей подсказке.
-    pub description: &'static str,
     pub requires_admin: bool,
     /// Службы, которые останавливаются на время очистки и затем запускаются снова.
     pub services_to_stop: &'static [&'static str],
     pub actions: Vec<Action>,
+}
+
+impl CleanupTask {
+    pub fn title(&self) -> String {
+        i18n::text(&format!("task.{}.title", self.id))
+    }
+
+    /// Подробности, которые показываются во всплывающей подсказке.
+    pub fn description(&self) -> String {
+        i18n::text(&format!("task.{}.description", self.id))
+    }
 }
 
 fn clear_dir(pattern: impl Into<String>) -> Action {
@@ -67,28 +79,18 @@ pub fn all_tasks() -> Vec<CleanupTask> {
     vec![
         CleanupTask {
             id: "memory",
-            title: "Очистка оперативной памяти фоновых процессов",
-            description: "Просит Windows выгрузить неиспользуемые страницы памяти всех процессов \
-                          (EmptyWorkingSet). Процессы не завершаются.",
             requires_admin: true,
             services_to_stop: &[],
             actions: vec![Action::TrimProcessMemory],
         },
         CleanupTask {
             id: "games_gpu_cache",
-            title: "Очистка кэша игр, Steam, Epic Games, видеокарт NVIDIA, AMD и Intel",
-            description: "Кэш шейдеров DirectX / OpenGL / Vulkan, веб-кэш и логи лаунчеров. \
-                          Игры и сохранения не затрагиваются. Кэш шейдеров пересоберётся \
-                          при следующем запуске игр.",
             requires_admin: false,
             services_to_stop: &[],
             actions: games_and_gpu_cache_actions(),
         },
         CleanupTask {
             id: "installers_cache",
-            title: "Очистка кэша инсталляций NVIDIA (Installer2) и Microsoft Office (MSOCache)",
-            description: "Распакованные пакеты старых драйверов NVIDIA и локальная копия \
-                          установщика Office. Для восстановления Office может понадобиться дистрибутив.",
             requires_admin: true,
             services_to_stop: &[],
             actions: vec![
@@ -99,18 +101,12 @@ pub fn all_tasks() -> Vec<CleanupTask> {
         },
         CleanupTask {
             id: "browsers_cache",
-            title: "Очистка кэша браузеров Chrome, Edge, Opera, Firefox, Яндекс и прочих",
-            description: "Только кэш страниц, скриптов и шейдеров. Cookies, история, пароли, \
-                          закладки и расширения не затрагиваются. Для полной очистки закройте браузеры.",
             requires_admin: false,
             services_to_stop: &[],
             actions: browser_cache_actions(),
         },
         CleanupTask {
             id: "explorer_cache",
-            title: "Очистка кэша эскизов и иконок проводника",
-            description: "Миниатюры картинок и видео, кэш иконок. Windows пересоздаст их по мере надобности. \
-                          Файлы, которые проводник держит открытыми, будут пропущены.",
             requires_admin: false,
             services_to_stop: &[],
             actions: vec![
@@ -121,9 +117,6 @@ pub fn all_tasks() -> Vec<CleanupTask> {
         },
         CleanupTask {
             id: "defender_cache",
-            title: "Очистка истории сканирования и журналов Защитника Windows",
-            description: "История проверок и служебные журналы Защитника. Карантин и базы сигнатур \
-                          не затрагиваются. При включённой защите от подделки часть файлов будет пропущена.",
             requires_admin: true,
             services_to_stop: &[],
             actions: vec![
@@ -135,8 +128,6 @@ pub fn all_tasks() -> Vec<CleanupTask> {
         },
         CleanupTask {
             id: "windows_setup_cache",
-            title: "Очистка кэша установок Windows",
-            description: "Кэш патчей установщика Windows и остатки загрузок обновления до новой версии Windows.",
             requires_admin: true,
             services_to_stop: &[],
             actions: vec![
@@ -148,9 +139,6 @@ pub fn all_tasks() -> Vec<CleanupTask> {
         },
         CleanupTask {
             id: "windows_update_cache",
-            title: "Очистка кэша обновлений Windows",
-            description: "Скачанные пакеты Центра обновления и кэш оптимизации доставки. \
-                          Службы обновления останавливаются на время очистки.",
             requires_admin: true,
             services_to_stop: &["wuauserv", "bits", "dosvc"],
             actions: vec![
@@ -162,17 +150,12 @@ pub fn all_tasks() -> Vec<CleanupTask> {
         },
         CleanupTask {
             id: "system_logs",
-            title: "Очистка системных журналов Windows",
-            description: "Журналы событий Windows и текстовые журналы установки и обслуживания системы.",
             requires_admin: true,
             services_to_stop: &[],
             actions: system_log_actions(),
         },
         CleanupTask {
             id: "driver_leftovers",
-            title: "Удаление остатков установщиков NVIDIA / AMD / Intel",
-            description: "Папки C:\\NVIDIA и C:\\AMD, куда распаковываются установщики драйверов, \
-                          и журналы C:\\Intel\\Logs. Установленные драйверы не затрагиваются.",
             requires_admin: true,
             services_to_stop: &[],
             actions: vec![
@@ -183,17 +166,12 @@ pub fn all_tasks() -> Vec<CleanupTask> {
         },
         CleanupTask {
             id: "user_temp",
-            title: "Удаление временных файлов пользователя",
-            description: "Папка %TEMP%. Файлы младше одного часа и файлы, занятые программами, пропускаются.",
             requires_admin: false,
             services_to_stop: &[],
             actions: vec![clear_dir_older_than(r"%TEMP%", TEMP_MIN_AGE)],
         },
         CleanupTask {
             id: "system_temp",
-            title: "Удаление временных файлов Windows",
-            description: "Временные папки Windows и системных служб. Файлы младше одного часа \
-                          и занятые файлы пропускаются.",
             requires_admin: true,
             services_to_stop: &[],
             actions: vec![
@@ -205,8 +183,6 @@ pub fn all_tasks() -> Vec<CleanupTask> {
         },
         CleanupTask {
             id: "diagnostics",
-            title: "Удаление файлов диагностики Windows",
-            description: "Трассировки диагностики и телеметрии (ETL), отчёты об энергопотреблении.",
             requires_admin: true,
             services_to_stop: &[],
             actions: vec![
@@ -217,8 +193,6 @@ pub fn all_tasks() -> Vec<CleanupTask> {
         },
         CleanupTask {
             id: "user_reports",
-            title: "Удаление отчётов об ошибках и дампов программ",
-            description: "Отчёты Windows Error Reporting и аварийные дампы программ текущего пользователя.",
             requires_admin: false,
             services_to_stop: &[],
             actions: vec![
@@ -228,8 +202,6 @@ pub fn all_tasks() -> Vec<CleanupTask> {
         },
         CleanupTask {
             id: "system_reports",
-            title: "Удаление системных отчётов об ошибках и дампов памяти",
-            description: "Системные отчёты Windows Error Reporting, мини-дампы и полный дамп памяти после BSOD.",
             requires_admin: true,
             services_to_stop: &[],
             actions: vec![
