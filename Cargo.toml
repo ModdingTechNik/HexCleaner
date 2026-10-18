@@ -42,6 +42,13 @@ windows = { version = "0.62", features = [
 ] }
 zip = { version = "9", default-features = false, features = ["deflate-flate2-zlib-rs"] }
 
+# Только для сборки иконки: cargo run --example make_icon
+[dev-dependencies]
+resvg = "0.48"
+
+[build-dependencies]
+embed-resource = "3"
+
 [profile.release]
 lto = true
 strip = true

@@ -1,0 +1,4 @@
+// Ресурсы командной строки HexCleanerCli.exe.
+#define FILE_DESCRIPTION  "HexCleaner command line"
+#define ORIGINAL_FILENAME "HexCleanerCli.exe"
+#include "common.rc"

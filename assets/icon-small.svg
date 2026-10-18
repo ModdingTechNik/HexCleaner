@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+  <!-- Иконка HexCleaner для 16–24 px: толще линии, крупнее веник, без мелких деталей. -->
+  <path d="M50 5 L89 27.5 L89 72.5 L50 95 L11 72.5 L11 27.5 Z"
+        fill="#262A33" stroke="#6B7383" stroke-width="7" stroke-linejoin="round"/>
+  <line x1="68" y1="17" x2="50" y2="51" stroke="#F2F2F2" stroke-width="12" stroke-linecap="round"/>
+  <path d="M31 48 L65 57 L61 84 L19 73 Z" fill="#F5C518" stroke="#F5C518" stroke-width="4" stroke-linejoin="round"/>
+</svg>

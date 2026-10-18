@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+  <!-- Иконка HexCleaner: метла в тёмном шестиугольнике. Для размеров 32 px и больше. -->
+  <!-- Светлая окантовка отделяет шестиугольник от тёмной панели задач. -->
+  <path d="M50 5 L89 27.5 L89 72.5 L50 95 L11 72.5 L11 27.5 Z"
+        fill="#262A33" stroke="#5B6372" stroke-width="4" stroke-linejoin="round"/>
+  <!-- Ручка -->
+  <line x1="67" y1="19" x2="47" y2="55" stroke="#F2F2F2" stroke-width="7" stroke-linecap="round"/>
+  <!-- Веник -->
+  <path d="M35 52 L60 59 L57 81 L24 72 Z" fill="#F5C518" stroke="#F5C518" stroke-width="3" stroke-linejoin="round"/>
+  <!-- Обвязка и прутья -->
+  <line x1="35" y1="52" x2="60" y2="59" stroke="#B88A00" stroke-width="4" stroke-linecap="round"/>
+  <line x1="41" y1="60" x2="34" y2="75" stroke="#B88A00" stroke-width="2" stroke-linecap="round"/>
+  <line x1="48" y1="62" x2="44" y2="78" stroke="#B88A00" stroke-width="2" stroke-linecap="round"/>
+  <line x1="55" y1="64" x2="53" y2="80" stroke="#B88A00" stroke-width="2" stroke-linecap="round"/>
+  <!-- Искорка чистоты -->
+  <path d="M30 26 C31 32 32 33 38 34 C32 35 31 36 30 42 C29 36 28 35 22 34 C28 33 29 32 30 26 Z" fill="#F2F2F2"/>
+</svg>

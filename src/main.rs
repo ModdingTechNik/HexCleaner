@@ -19,13 +19,15 @@ fn main() -> eframe::Result {
     i18n::export_built_in_languages();
     let language_error = i18n::select_language(settings.language.as_deref());
 
-    let options = eframe::NativeOptions {
-        viewport: egui::ViewportBuilder::default()
-            .with_title(app::window_title(is_admin))
-            .with_inner_size([780.0, 560.0])
-            .with_min_inner_size([600.0, 400.0]),
-        ..Default::default()
-    };
+    let mut viewport = egui::ViewportBuilder::default()
+        .with_title(app::window_title(is_admin))
+        .with_inner_size([780.0, 560.0])
+        .with_min_inner_size([600.0, 400.0]);
+    // Иконка окна и панели задач — та же, что вшита в exe (см. examples/make_icon.rs).
+    if let Ok(icon) = eframe::icon_data::from_png_bytes(include_bytes!("../assets/icon-256.png")) {
+        viewport = viewport.with_icon(icon);
+    }
+    let options = eframe::NativeOptions { viewport, ..Default::default() };
 
     eframe::run_native(
         "HexCleaner",

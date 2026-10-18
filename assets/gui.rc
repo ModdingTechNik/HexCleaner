@@ -1,0 +1,4 @@
+// Ресурсы окна HexCleaner.exe.
+#define FILE_DESCRIPTION  "HexCleaner - Windows junk and cache cleaner"
+#define ORIGINAL_FILENAME "HexCleaner.exe"
+#include "common.rc"

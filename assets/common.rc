@@ -1,0 +1,36 @@
+// Общие ресурсы Windows для HexCleaner.exe и HexCleanerCli.exe: иконка и сведения о файле
+// (вкладка «Подробно» в свойствах файла). Подключается из gui.rc и cli.rc, которые задают
+// FILE_DESCRIPTION и ORIGINAL_FILENAME; номер версии передаёт build.rs из Cargo.toml.
+// Строки — латиницей: так их одинаково понимают все компиляторы ресурсов.
+
+// Строка версии «0.1.0» собирается из номеров: передать строку в кавычках через
+// параметры компилятора ресурсов надёжно нельзя — кавычки теряются по дороге.
+#define STRINGIFY(x) #x
+#define TO_STRING(x) STRINGIFY(x)
+#define VERSION_TEXT TO_STRING(VERSION_MAJOR.VERSION_MINOR.VERSION_PATCH)
+
+// Первая иконка в файле — иконка exe в Проводнике и на ярлыках.
+1 ICON "icon.ico"
+
+1 VERSIONINFO
+FILEVERSION     VERSION_MAJOR, VERSION_MINOR, VERSION_PATCH, 0
+PRODUCTVERSION  VERSION_MAJOR, VERSION_MINOR, VERSION_PATCH, 0
+FILEOS          0x40004
+FILETYPE        0x1
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "040904B0"
+        BEGIN
+            VALUE "ProductName",      "HexCleaner"
+            VALUE "FileDescription",  FILE_DESCRIPTION
+            VALUE "FileVersion",      VERSION_TEXT
+            VALUE "ProductVersion",   VERSION_TEXT
+            VALUE "OriginalFilename", ORIGINAL_FILENAME
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x0409, 1200
+    END
+END
