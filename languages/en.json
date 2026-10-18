@@ -128,6 +128,8 @@
     "log.event_logs_list_failed": "  could not list event logs: {error}",
     "log.event_logs_summary": "  event logs cleared: {cleared}, skipped (active or protected): {skipped}",
     "log.memory_summary": "  processes trimmed: {trimmed}, inaccessible: {inaccessible}, freed: {size}",
+    "log.recycle_bin_emptied": "  Recycle Bin emptied: {files} files, {size}",
+    "log.recycle_bin_failed": "  could not empty the Recycle Bin: {error}",
     "log.service_stopped": "  service {name} stopped",
     "log.service_stop_failed": "  could not stop service {name}: {error}",
     "log.service_started": "  service {name} started",
@@ -161,6 +163,8 @@
     "task.diagnostics.description": "Diagnostic and telemetry traces (ETL), power usage reports.",
     "task.user_reports.title": "Delete program error reports and crash dumps",
     "task.user_reports.description": "Windows Error Reporting reports and crash dumps of the current user's programs.",
+    "task.recycle_bin.title": "Empty the Recycle Bin",
+    "task.recycle_bin.description": "Permanently deletes the files in the Recycle Bin on all drives. They cannot be restored afterwards, so check the Recycle Bin first.",
     "task.system_reports.title": "Delete system error reports and memory dumps",
     "task.system_reports.description": "System Windows Error Reporting reports, minidumps and the full memory dump after a BSOD."
   }

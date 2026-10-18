@@ -22,7 +22,7 @@ use std::time::{Duration, Instant};
 
 use crate::catalog::{Action, CleanupTask};
 use crate::system::delete::DeleteError;
-use crate::system::{event_log, memory, services};
+use crate::system::{event_log, memory, recycle_bin, services};
 use crate::t;
 
 pub use log::logs_directory;
@@ -243,6 +243,7 @@ impl<'a> TaskRun<'a> {
             }
             Action::ClearEventLogs => self.clear_event_logs(),
             Action::TrimProcessMemory => self.trim_process_memory(),
+            Action::EmptyRecycleBin => self.empty_recycle_bin(),
         }
     }
 
@@ -321,6 +322,33 @@ impl<'a> TaskRun<'a> {
         ));
     }
 
+    /// Корзина. При анализе только узнаём, сколько в ней лежит.
+    fn empty_recycle_bin(&mut self) {
+        // Специальная папка оболочки: клик по ней в разбивке откроет корзину в проводнике.
+        self.enter_location(Path::new("shell:RecycleBinFolder"));
+        let contents = match recycle_bin::query() {
+            Ok(contents) => contents,
+            Err(error) => {
+                self.log.line(&t!("log.recycle_bin_failed", error = error));
+                return;
+            }
+        };
+        if contents.items == 0 {
+            return;
+        }
+
+        if !self.is_analysis() {
+            if let Err(error) = recycle_bin::empty() {
+                self.report.failed += 1;
+                self.log.line(&t!("log.recycle_bin_failed", error = error));
+                return;
+            }
+            let size = format_size(contents.bytes);
+            self.log.line(&t!("log.recycle_bin_emptied", files = contents.items, size = size));
+        }
+        self.record_files(contents.items, contents.bytes);
+    }
+
     /// Останавливает запущенные службы и возвращает их имена, чтобы потом запустить снова.
     fn stop_services(&mut self, names: &[&'static str]) -> Vec<&'static str> {
         let mut stopped = Vec::new();
@@ -377,14 +405,19 @@ impl<'a> TaskRun<'a> {
 
     /// Учитывает файл: удалённый при очистке или найденный при анализе.
     fn record_file(&mut self, path: &Path, size: u64) {
-        self.report.deleted_files += 1;
-        self.add_freed_bytes(size);
-        if let Some(index) = self.current_location {
-            self.locations[index].files += 1;
-        }
         // При анализе по каждому файлу журнал не пишем — только итоги по папкам.
         if !self.is_analysis() {
             self.log.deleted(path, size);
+        }
+        self.record_files(1, size);
+    }
+
+    /// Учитывает сразу несколько файлов общим размером `bytes`.
+    fn record_files(&mut self, count: u64, bytes: u64) {
+        self.report.deleted_files += count;
+        self.add_freed_bytes(bytes);
+        if let Some(index) = self.current_location {
+            self.locations[index].files += count;
         }
 
         if self.last_progress.elapsed() >= PROGRESS_INTERVAL {

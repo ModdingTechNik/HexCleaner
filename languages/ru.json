@@ -128,6 +128,8 @@
     "log.event_logs_list_failed": "  не удалось получить список журналов событий: {error}",
     "log.event_logs_summary": "  журналов событий очищено: {cleared}, пропущено (активные или защищённые): {skipped}",
     "log.memory_summary": "  обработано процессов: {trimmed}, недоступно: {inaccessible}, освобождено: {size}",
+    "log.recycle_bin_emptied": "  корзина очищена: файлов {files}, {size}",
+    "log.recycle_bin_failed": "  не удалось очистить корзину: {error}",
     "log.service_stopped": "  служба {name} остановлена",
     "log.service_stop_failed": "  не удалось остановить службу {name}: {error}",
     "log.service_started": "  служба {name} запущена",
@@ -161,6 +163,8 @@
     "task.diagnostics.description": "Трассировки диагностики и телеметрии (ETL), отчёты об энергопотреблении.",
     "task.user_reports.title": "Удаление отчётов об ошибках и дампов программ",
     "task.user_reports.description": "Отчёты Windows Error Reporting и аварийные дампы программ текущего пользователя.",
+    "task.recycle_bin.title": "Очистка корзины",
+    "task.recycle_bin.description": "Безвозвратно удаляет файлы из корзины на всех дисках. Восстановить их после этого будет нельзя — перед очисткой загляните в корзину.",
     "task.system_reports.title": "Удаление системных отчётов об ошибках и дампов памяти",
     "task.system_reports.description": "Системные отчёты Windows Error Reporting, мини-дампы и полный дамп памяти после BSOD."
   }

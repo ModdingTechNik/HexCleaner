@@ -37,6 +37,8 @@ pub enum Action {
     ClearEventLogs,
     /// Сбросить рабочие наборы памяти всех процессов.
     TrimProcessMemory,
+    /// Очистить корзину текущего пользователя на всех дисках.
+    EmptyRecycleBin,
 }
 
 /// Насколько безопасно чистить пункт. Уровни идут от самого безопасного к самому
@@ -254,6 +256,14 @@ pub fn all_tasks() -> Vec<CleanupTask> {
                 clear_dir(r"%WINDIR%\LiveKernelReports"),
                 delete_files(r"%WINDIR%\MEMORY.DMP"),
             ],
+        },
+        CleanupTask {
+            id: "recycle_bin",
+            // Это файлы, которые пользователь удалил сам: после очистки их не вернуть.
+            safety: Safety::Caution,
+            requires_admin: false,
+            services_to_stop: &[],
+            actions: vec![Action::EmptyRecycleBin],
         },
     ]
 }
