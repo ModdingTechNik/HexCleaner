@@ -1,4 +1,5 @@
-//! Значок щита администратора (как в UAC и Windows Terminal).
+//! Рисованные значки: щит администратора (как в UAC и Windows Terminal)
+//! и цветные точки уровней безопасности.
 
 use eframe::egui::{Atom, Color32, Painter, Pos2, Rect, Response, Sense, Shape, Stroke, Ui, pos2, vec2};
 
@@ -65,5 +66,19 @@ fn quadratic_bezier(from: Pos2, control: Pos2, to: Pos2) -> impl Iterator<Item =
 pub fn shield_icon(ui: &mut Ui, height: f32) -> Response {
     let (rect, response) = ui.allocate_exact_size(vec2(height * 0.8, height), Sense::hover());
     paint_shield(ui.painter(), rect);
+    response
+}
+
+/// Цветная точка как элемент виджета — метка уровня безопасности пункта.
+pub fn dot_atom<'a>(color: Color32) -> Atom<'a> {
+    Atom::paint(vec2(8.0, 8.0), move |ui, args| {
+        ui.painter().circle_filled(args.rect.center(), 4.0, color);
+    })
+}
+
+/// Цветная точка как самостоятельный значок (для легенды).
+pub fn dot(ui: &mut Ui, color: Color32) -> Response {
+    let (rect, response) = ui.allocate_exact_size(vec2(8.0, 8.0), Sense::hover());
+    ui.painter().circle_filled(rect.center(), 4.0, color);
     response
 }

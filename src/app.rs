@@ -7,19 +7,20 @@ use std::time::Duration;
 
 use eframe::egui::collapsing_header::CollapsingState;
 use eframe::egui::{
-    self, Align, Button, CentralPanel, Checkbox, Color32, ComboBox, Grid, Layout, Panel, RichText, ScrollArea, Ui,
-    vec2,
+    self, Align, Button, CentralPanel, Checkbox, Color32, ComboBox, Grid, Key, Layout, Panel, RichText, ScrollArea,
+    TextEdit, Ui, vec2,
 };
 
-use crate::catalog::{self, CleanupTask};
+use crate::catalog::{self, CleanupTask, Safety};
 use crate::cleaner::{
     self, CleanupEvent, CleanupJob, CleanupOptions, Location, Mode, TaskReport, TaskResult, format_size,
 };
 use crate::i18n::{self, LanguageInfo};
+use crate::presets::{self, ActivePreset, Selection};
 use crate::settings::{Settings, Theme};
 use crate::system::admin;
 use crate::t;
-use crate::widgets::{shield_atom, shield_icon};
+use crate::widgets::{dot, dot_atom, shield_atom, shield_icon};
 
 /// Цвета результатов, подобранные под тёмную и светлую темы.
 struct Palette {
@@ -46,6 +47,23 @@ impl Palette {
             }
         }
     }
+
+    /// Цвет точки уровня безопасности: зелёный, жёлтый, красный.
+    fn safety(&self, safety: Safety) -> Color32 {
+        match safety {
+            Safety::Safe => self.success,
+            Safety::Moderate => self.found,
+            Safety::Caution => self.error,
+        }
+    }
+}
+
+/// Что пользователь выбрал в списке наборов.
+enum PresetAction {
+    Apply(Selection),
+    Delete(String),
+    /// Показать поле для названия нового набора.
+    StartSaving,
 }
 
 /// Сколько папок показывать в разбивке пункта; полный список — в журнале.
@@ -83,6 +101,10 @@ pub struct HexCleanerApp {
     last_log: Option<PathBuf>,
     /// Языки для списка выбора: встроенные и найденные в папке языков.
     languages: Vec<LanguageInfo>,
+    /// Название нового набора, пока пользователь его вводит.
+    new_preset_name: Option<String>,
+    /// Поставить курсор в поле названия набора (один раз, когда поле появилось).
+    focus_preset_name: bool,
 }
 
 impl HexCleanerApp {
@@ -107,6 +129,8 @@ impl HexCleanerApp {
             status: Status::Ready,
             last_log: None,
             languages: Vec::new(),
+            new_preset_name: None,
+            focus_preset_name: false,
         };
         app.refresh_languages();
         if let Some(error) = language_error {
@@ -124,13 +148,32 @@ impl HexCleanerApp {
         !task.requires_admin || self.is_admin
     }
 
+    /// Отмечен ли пункт. Пункты, которые пользователь ещё не трогал, отмечены,
+    /// если они входят в рекомендуемый набор.
+    fn is_selected(&self, task: &CleanupTask) -> bool {
+        self.settings.is_selected(task.id).unwrap_or(task.safety.selected_by_default())
+    }
+
+    /// Все отмеченные пункты, включая недоступные без прав администратора.
+    fn current_selection(&self) -> Selection {
+        self.tasks.iter().filter(|task| self.is_selected(task)).map(|task| task.id.to_owned()).collect()
+    }
+
+    /// Расставляет галочки по набору — у всех пунктов, включая недоступные без прав.
+    fn apply_selection(&mut self, selection: &Selection) {
+        for task in self.tasks.iter() {
+            self.settings.set_selected(task.id, selection.contains(task.id));
+        }
+        self.settings.save();
+    }
+
     // --- Действия ---
 
     /// Запускает очистку или анализ отмеченных пунктов.
     fn start(&mut self, mode: Mode) {
         // Передаём все отмеченные пункты: недоступные без прав движок пропустит и отметит в журнале.
         let selected: Vec<usize> = (0..self.tasks.len())
-            .filter(|&index| self.settings.is_selected(self.tasks[index].id))
+            .filter(|&index| self.is_selected(&self.tasks[index]))
             .collect();
 
         self.task_states.fill(TaskState::Idle);
@@ -323,21 +366,14 @@ impl HexCleanerApp {
     }
 
     fn task_list(&mut self, ui: &mut Ui) {
-        let all_selected = self
-            .tasks
-            .iter()
-            .filter(|task| self.is_available(task))
-            .all(|task| self.settings.is_selected(task.id));
-
-        ui.horizontal(|ui| {
-            let label = if all_selected { t!("list.unselect_all") } else { t!("list.select_all") };
-            if ui.add_enabled(!self.is_running(), Button::new(label)).clicked() {
-                self.set_all_available(!all_selected);
-            }
-            if !self.is_admin {
-                ui.label(RichText::new(t!("list.admin_hint")).weak());
-            }
-        });
+        if self.new_preset_name.is_some() {
+            self.preset_name_editor(ui);
+        } else {
+            self.selection_toolbar(ui);
+        }
+        if !self.is_admin {
+            ui.label(RichText::new(t!("list.admin_hint")).weak());
+        }
         ui.separator();
 
         let tasks = Arc::clone(&self.tasks);
@@ -346,6 +382,121 @@ impl HexCleanerApp {
                 self.task_entry(ui, index, task);
             }
         });
+    }
+
+    /// Строка над списком: набор галочек, «Отметить все» и легенда уровней безопасности.
+    fn selection_toolbar(&mut self, ui: &mut Ui) {
+        let all_selected = self.tasks.iter().filter(|task| self.is_available(task)).all(|task| self.is_selected(task));
+
+        ui.horizontal(|ui| {
+            ui.add_enabled_ui(!self.is_running(), |ui| {
+                ui.label(t!("presets.label"));
+                self.preset_selector(ui);
+
+                let label = if all_selected { t!("list.unselect_all") } else { t!("list.select_all") };
+                if ui.button(label).clicked() {
+                    self.set_all_available(!all_selected);
+                }
+            });
+
+            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                let palette = Palette::of(ui);
+                // Справа налево: последний уровень оказывается крайним справа.
+                for level in Safety::ALL.into_iter().rev() {
+                    ui.label(safety_name(level)).on_hover_text(safety_hint(level));
+                    dot(ui, palette.safety(level));
+                    ui.add_space(6.0);
+                }
+            });
+        });
+    }
+
+    fn preset_selector(&mut self, ui: &mut Ui) {
+        let active = presets::find_active(&self.tasks, &self.settings.presets, &self.current_selection());
+        let selected_text = match &active {
+            ActivePreset::BuiltIn(level) => preset_name(*level),
+            ActivePreset::User(name) => name.clone(),
+            ActivePreset::Custom => t!("presets.custom"),
+        };
+
+        let mut action = None;
+        ComboBox::from_id_salt("presets").selected_text(selected_text).width(190.0).show_ui(ui, |ui| {
+            let palette = Palette::of(ui);
+            for level in Safety::ALL {
+                let item = Button::selectable(
+                    active == ActivePreset::BuiltIn(level),
+                    (dot_atom(palette.safety(level)), preset_name(level)),
+                );
+                if ui.add(item).on_hover_text(preset_hint(level)).clicked() {
+                    action = Some(PresetAction::Apply(presets::built_in(&self.tasks, level)));
+                }
+            }
+
+            if !self.settings.presets.is_empty() {
+                ui.separator();
+            }
+            for preset in &self.settings.presets {
+                ui.horizontal(|ui| {
+                    let is_active = active == ActivePreset::User(preset.name.clone());
+                    if ui.selectable_label(is_active, &preset.name).clicked() {
+                        action = Some(PresetAction::Apply(preset.tasks.clone()));
+                    }
+                    if ui.small_button(t!("presets.delete")).clicked() {
+                        action = Some(PresetAction::Delete(preset.name.clone()));
+                    }
+                });
+            }
+
+            ui.separator();
+            if ui.button(t!("presets.save")).clicked() {
+                action = Some(PresetAction::StartSaving);
+            }
+        });
+
+        match action {
+            Some(PresetAction::Apply(selection)) => self.apply_selection(&selection),
+            Some(PresetAction::Delete(name)) => {
+                presets::delete(&mut self.settings.presets, &name);
+                self.settings.save();
+            }
+            Some(PresetAction::StartSaving) => {
+                self.new_preset_name = Some(String::new());
+                self.focus_preset_name = true;
+            }
+            None => {}
+        }
+    }
+
+    /// Поле для названия нового набора вместо строки с наборами.
+    /// Enter — сохранить текущие галочки как набор, Escape — отменить.
+    fn preset_name_editor(&mut self, ui: &mut Ui) {
+        let mut name = self.new_preset_name.take().unwrap_or_default();
+        let mut save = false;
+        let mut cancel = false;
+
+        ui.horizontal(|ui| {
+            ui.label(t!("presets.name_label"));
+            let edit =
+                ui.add(TextEdit::singleline(&mut name).hint_text(t!("presets.name_hint")).desired_width(220.0));
+            if self.focus_preset_name {
+                edit.request_focus();
+                self.focus_preset_name = false;
+            }
+
+            let is_valid = !name.trim().is_empty();
+            let enter_pressed = edit.lost_focus() && ui.input(|input| input.key_pressed(Key::Enter));
+            let save_clicked = ui.add_enabled(is_valid, Button::new(t!("presets.save_button"))).clicked();
+            save = is_valid && (save_clicked || enter_pressed);
+            cancel = ui.button(t!("presets.cancel")).clicked() || ui.input(|input| input.key_pressed(Key::Escape));
+        });
+
+        if save {
+            let selection = self.current_selection();
+            presets::save(&mut self.settings.presets, &name, selection);
+            self.settings.save();
+        } else if !cancel {
+            self.new_preset_name = Some(name);
+        }
     }
 
     /// Пункт списка. Если для него известна разбивка по папкам, его можно развернуть.
@@ -372,15 +523,18 @@ impl HexCleanerApp {
     }
 
     fn task_row(&mut self, ui: &mut Ui, index: usize, task: &CleanupTask) {
-        let mut selected = self.settings.is_selected(task.id);
+        let palette = Palette::of(ui);
+        let mut selected = self.is_selected(task);
+        let safety_dot = dot_atom(palette.safety(task.safety));
         let checkbox = if task.requires_admin {
-            Checkbox::new(&mut selected, (task.title(), shield_atom(14.0)))
+            Checkbox::new(&mut selected, (safety_dot, task.title(), shield_atom(14.0)))
         } else {
-            Checkbox::new(&mut selected, task.title())
+            Checkbox::new(&mut selected, (safety_dot, task.title()))
         };
 
         let enabled = self.is_available(task) && !self.is_running();
-        let description = task.description();
+        let safety_line = t!("list.safety_line", level = safety_name(task.safety), hint = safety_hint(task.safety));
+        let description = format!("{}\n\n{safety_line}", task.description());
         let response = ui
             .add_enabled(enabled, checkbox)
             .on_hover_text(&description)
@@ -394,7 +548,6 @@ impl HexCleanerApp {
             self.settings.save();
         }
 
-        let palette = Palette::of(ui);
         let result_color = match self.mode {
             Mode::Clean => palette.success,
             Mode::Analyze => palette.found,
@@ -437,7 +590,7 @@ impl HexCleanerApp {
                 let has_selection = self
                     .tasks
                     .iter()
-                    .any(|task| self.is_available(task) && self.settings.is_selected(task.id));
+                    .any(|task| self.is_available(task) && self.is_selected(task));
 
                 let analyze = Button::new(t!("footer.analyze")).min_size(vec2(110.0, 30.0));
                 let response = ui.add_enabled(has_selection, analyze).on_hover_text(t!("footer.analyze.hint"));
@@ -574,6 +727,39 @@ fn short_path(path: &Path) -> String {
 /// Заголовок окна на текущем языке.
 pub fn window_title(is_admin: bool) -> String {
     if is_admin { t!("window.title_admin") } else { t!("window.title") }
+}
+
+fn safety_name(safety: Safety) -> String {
+    match safety {
+        Safety::Safe => t!("safety.safe"),
+        Safety::Moderate => t!("safety.moderate"),
+        Safety::Caution => t!("safety.caution"),
+    }
+}
+
+fn safety_hint(safety: Safety) -> String {
+    match safety {
+        Safety::Safe => t!("safety.safe.hint"),
+        Safety::Moderate => t!("safety.moderate.hint"),
+        Safety::Caution => t!("safety.caution.hint"),
+    }
+}
+
+/// Название встроенного набора, который включает пункты не опаснее `level`.
+fn preset_name(level: Safety) -> String {
+    match level {
+        Safety::Safe => t!("presets.safe"),
+        Safety::Moderate => t!("presets.recommended"),
+        Safety::Caution => t!("presets.full"),
+    }
+}
+
+fn preset_hint(level: Safety) -> String {
+    match level {
+        Safety::Safe => t!("presets.safe.hint"),
+        Safety::Moderate => t!("presets.recommended.hint"),
+        Safety::Caution => t!("presets.full.hint"),
+    }
 }
 
 fn theme_name(theme: Theme) -> String {

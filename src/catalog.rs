@@ -11,6 +11,9 @@
 //!   или специальная переменная (см. `cleaner::paths`), например `%STEAM%`;
 //! * `*` — любое имя файла или папки (например, любой профиль браузера).
 //!
+//! У каждого пункта есть уровень безопасности ([`Safety`]): временные файлы и кэши
+//! безопасны, остальное — с последствиями разной тяжести.
+//!
 //! Принцип: трогаем только кэши, временные файлы, журналы и отчёты.
 //! Документы, сохранения игр, cookies, пароли и история браузеров не затрагиваются.
 
@@ -36,11 +39,35 @@ pub enum Action {
     TrimProcessMemory,
 }
 
+/// Насколько безопасно чистить пункт. Уровни идут от самого безопасного к самому
+/// рискованному — на этом порядке построены встроенные наборы галочек.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Safety {
+    /// Временные файлы и кэши: всё пересоздаётся само, ничего нужного не теряется.
+    Safe,
+    /// Безопасно, но с последствиями: что-то придётся скачать заново
+    /// или пропадут данные для диагностики сбоев.
+    Moderate,
+    /// Удаляются данные, которые могут понадобиться: журналы событий, история Защитника,
+    /// файлы для восстановления установленных программ.
+    Caution,
+}
+
+impl Safety {
+    pub const ALL: [Safety; 3] = [Safety::Safe, Safety::Moderate, Safety::Caution];
+
+    /// Отмечать ли пункт, если пользователь его ещё ни разу не трогал.
+    pub fn selected_by_default(self) -> bool {
+        self <= Safety::Moderate
+    }
+}
+
 /// Пункт очистки, который пользователь видит в списке.
 pub struct CleanupTask {
     /// Стабильный идентификатор — по нему сохраняется выбор пользователя
     /// и находятся заголовок и описание в файлах перевода.
     pub id: &'static str,
+    pub safety: Safety,
     pub requires_admin: bool,
     /// Службы, которые останавливаются на время очистки и затем запускаются снова.
     pub services_to_stop: &'static [&'static str],
@@ -79,18 +106,21 @@ pub fn all_tasks() -> Vec<CleanupTask> {
     vec![
         CleanupTask {
             id: "memory",
+            safety: Safety::Moderate,
             requires_admin: true,
             services_to_stop: &[],
             actions: vec![Action::TrimProcessMemory],
         },
         CleanupTask {
             id: "games_gpu_cache",
+            safety: Safety::Safe,
             requires_admin: false,
             services_to_stop: &[],
             actions: games_and_gpu_cache_actions(),
         },
         CleanupTask {
             id: "installers_cache",
+            safety: Safety::Caution,
             requires_admin: true,
             services_to_stop: &[],
             actions: vec![
@@ -101,12 +131,14 @@ pub fn all_tasks() -> Vec<CleanupTask> {
         },
         CleanupTask {
             id: "browsers_cache",
+            safety: Safety::Safe,
             requires_admin: false,
             services_to_stop: &[],
             actions: browser_cache_actions(),
         },
         CleanupTask {
             id: "explorer_cache",
+            safety: Safety::Safe,
             requires_admin: false,
             services_to_stop: &[],
             actions: vec![
@@ -117,6 +149,7 @@ pub fn all_tasks() -> Vec<CleanupTask> {
         },
         CleanupTask {
             id: "defender_cache",
+            safety: Safety::Caution,
             requires_admin: true,
             services_to_stop: &[],
             actions: vec![
@@ -128,6 +161,7 @@ pub fn all_tasks() -> Vec<CleanupTask> {
         },
         CleanupTask {
             id: "windows_setup_cache",
+            safety: Safety::Caution,
             requires_admin: true,
             services_to_stop: &[],
             actions: vec![
@@ -139,6 +173,7 @@ pub fn all_tasks() -> Vec<CleanupTask> {
         },
         CleanupTask {
             id: "windows_update_cache",
+            safety: Safety::Moderate,
             requires_admin: true,
             services_to_stop: &["wuauserv", "bits", "dosvc"],
             actions: vec![
@@ -150,12 +185,14 @@ pub fn all_tasks() -> Vec<CleanupTask> {
         },
         CleanupTask {
             id: "system_logs",
+            safety: Safety::Caution,
             requires_admin: true,
             services_to_stop: &[],
             actions: system_log_actions(),
         },
         CleanupTask {
             id: "driver_leftovers",
+            safety: Safety::Safe,
             requires_admin: true,
             services_to_stop: &[],
             actions: vec![
@@ -166,12 +203,14 @@ pub fn all_tasks() -> Vec<CleanupTask> {
         },
         CleanupTask {
             id: "user_temp",
+            safety: Safety::Safe,
             requires_admin: false,
             services_to_stop: &[],
             actions: vec![clear_dir_older_than(r"%TEMP%", TEMP_MIN_AGE)],
         },
         CleanupTask {
             id: "system_temp",
+            safety: Safety::Safe,
             requires_admin: true,
             services_to_stop: &[],
             actions: vec![
@@ -183,6 +222,7 @@ pub fn all_tasks() -> Vec<CleanupTask> {
         },
         CleanupTask {
             id: "diagnostics",
+            safety: Safety::Moderate,
             requires_admin: true,
             services_to_stop: &[],
             actions: vec![
@@ -193,6 +233,7 @@ pub fn all_tasks() -> Vec<CleanupTask> {
         },
         CleanupTask {
             id: "user_reports",
+            safety: Safety::Safe,
             requires_admin: false,
             services_to_stop: &[],
             actions: vec![
@@ -202,6 +243,7 @@ pub fn all_tasks() -> Vec<CleanupTask> {
         },
         CleanupTask {
             id: "system_reports",
+            safety: Safety::Moderate,
             requires_admin: true,
             services_to_stop: &[],
             actions: vec![

@@ -1,4 +1,4 @@
-//! Сохранение выбранных пунктов, языка и темы между запусками.
+//! Сохранение выбранных пунктов, наборов галочек, языка и темы между запусками.
 //!
 //! Настройки хранятся в `%APPDATA%\HexCleaner\settings.json`. Благодаря этому выбор
 //! пунктов, требующих прав администратора, не теряется при запуске без прав
@@ -9,6 +9,8 @@ use std::fs;
 use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
+
+use crate::presets::UserPreset;
 
 /// Тема оформления.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -24,8 +26,11 @@ pub enum Theme {
 #[derive(Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
-    /// Отмечен ли пункт (ключ — `CleanupTask::id`). Пункты, которых здесь нет, отмечены.
+    /// Отмечен ли пункт (ключ — `CleanupTask::id`). Пунктов, которых пользователь
+    /// ещё не трогал, здесь нет — для них действует выбор по умолчанию.
     selected: BTreeMap<String, bool>,
+    /// Наборы галочек, сохранённые пользователем.
+    pub presets: Vec<UserPreset>,
     /// Сжимать ли журналы прошлых очисток в zip-архивы.
     pub compress_old_logs: bool,
     /// Код языка (имя файла перевода). `None` — язык Windows.
@@ -35,7 +40,13 @@ pub struct Settings {
 
 impl Default for Settings {
     fn default() -> Self {
-        Self { selected: BTreeMap::new(), compress_old_logs: true, language: None, theme: Theme::default() }
+        Self {
+            selected: BTreeMap::new(),
+            presets: Vec::new(),
+            compress_old_logs: true,
+            language: None,
+            theme: Theme::default(),
+        }
     }
 }
 
@@ -58,8 +69,9 @@ impl Settings {
         }
     }
 
-    pub fn is_selected(&self, task_id: &str) -> bool {
-        self.selected.get(task_id).copied().unwrap_or(true)
+    /// Отмечен ли пункт; `None` — пользователь его ещё не трогал.
+    pub fn is_selected(&self, task_id: &str) -> Option<bool> {
+        self.selected.get(task_id).copied()
     }
 
     pub fn set_selected(&mut self, task_id: &str, selected: bool) {

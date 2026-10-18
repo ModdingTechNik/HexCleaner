@@ -5,6 +5,7 @@ mod app;
 mod catalog;
 mod cleaner;
 mod i18n;
+mod presets;
 mod settings;
 mod system;
 mod widgets;
