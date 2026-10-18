@@ -10,7 +10,8 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
-use crate::presets::UserPreset;
+use crate::catalog::CleanupTask;
+use crate::presets::{Selection, UserPreset};
 
 /// Тема оформления.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -76,6 +77,17 @@ impl Settings {
 
     pub fn set_selected(&mut self, task_id: &str, selected: bool) {
         self.selected.insert(task_id.to_owned(), selected);
+    }
+
+    /// Отмечен ли пункт с учётом выбора по умолчанию: пункты, которые пользователь
+    /// ещё не трогал, отмечены, если они входят в рекомендуемый набор.
+    pub fn is_task_selected(&self, task: &CleanupTask) -> bool {
+        self.is_selected(task.id).unwrap_or(task.safety.selected_by_default())
+    }
+
+    /// Все отмеченные пункты, включая требующие прав администратора.
+    pub fn selection(&self, tasks: &[CleanupTask]) -> Selection {
+        tasks.iter().filter(|task| self.is_task_selected(task)).map(|task| task.id.to_owned()).collect()
     }
 }
 

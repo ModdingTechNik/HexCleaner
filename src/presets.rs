@@ -9,6 +9,7 @@ use std::collections::BTreeSet;
 use serde::{Deserialize, Serialize};
 
 use crate::catalog::{CleanupTask, Safety};
+use crate::t;
 
 /// Отмеченные пункты (их `CleanupTask::id`).
 pub type Selection = BTreeSet<String>;
@@ -28,6 +29,39 @@ pub enum ActivePreset {
     User(String),
     /// Галочки не совпадают ни с одним набором.
     Custom,
+}
+
+/// Имя встроенного набора для командной строки. Не переводится: его пишут в скриптах
+/// и в заданиях планировщика.
+pub fn built_in_id(level: Safety) -> &'static str {
+    match level {
+        Safety::Safe => "safe",
+        Safety::Moderate => "recommended",
+        Safety::Caution => "full",
+    }
+}
+
+/// Название встроенного набора на языке интерфейса.
+pub fn built_in_name(level: Safety) -> String {
+    match level {
+        Safety::Safe => t!("presets.safe"),
+        Safety::Moderate => t!("presets.recommended"),
+        Safety::Caution => t!("presets.full"),
+    }
+}
+
+/// Что входит во встроенный набор — для подсказки.
+pub fn built_in_hint(level: Safety) -> String {
+    match level {
+        Safety::Safe => t!("presets.safe.hint"),
+        Safety::Moderate => t!("presets.recommended.hint"),
+        Safety::Caution => t!("presets.full.hint"),
+    }
+}
+
+/// Встроенный набор по имени для командной строки (без учёта регистра).
+pub fn built_in_by_id(id: &str) -> Option<Safety> {
+    Safety::ALL.into_iter().find(|&level| built_in_id(level).eq_ignore_ascii_case(id))
 }
 
 /// Пункты встроенного набора — все, что не опаснее `max_safety`.

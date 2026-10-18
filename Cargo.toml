@@ -4,6 +4,20 @@ version = "0.1.0"
 edition = "2024"
 description = "Очистка мусорных файлов и кэшей Windows"
 
+# Ядро очистки — библиотека, общая для двух программ:
+# окна (HexCleaner.exe) и командной строки (HexCleanerCli.exe).
+[lib]
+name = "hexcleaner"
+path = "src/lib.rs"
+
+[[bin]]
+name = "HexCleaner"
+path = "src/main.rs"
+
+[[bin]]
+name = "HexCleanerCli"
+path = "src/bin/cli.rs"
+
 [dependencies]
 eframe = "0.37"
 serde = { version = "1", features = ["derive"] }
@@ -17,6 +31,7 @@ windows = { version = "0.62", features = [
     "Win32_Security",
     "Win32_Security_Authorization",
     "Win32_Storage_FileSystem",
+    "Win32_System_Console",
     "Win32_System_Threading",
     "Win32_System_ProcessStatus",
     "Win32_System_RestartManager",

@@ -20,6 +20,7 @@
 use std::time::Duration;
 
 use crate::i18n;
+use crate::t;
 
 /// Временные файлы моложе этого возраста не удаляются:
 /// ими может прямо сейчас пользоваться работающий установщик или программа.
@@ -57,6 +58,24 @@ pub enum Safety {
 
 impl Safety {
     pub const ALL: [Safety; 3] = [Safety::Safe, Safety::Moderate, Safety::Caution];
+
+    /// Название уровня на языке интерфейса: «Безопасно», «Умеренно», «Осторожно».
+    pub fn name(self) -> String {
+        match self {
+            Safety::Safe => t!("safety.safe"),
+            Safety::Moderate => t!("safety.moderate"),
+            Safety::Caution => t!("safety.caution"),
+        }
+    }
+
+    /// Чем грозит очистка пунктов этого уровня.
+    pub fn hint(self) -> String {
+        match self {
+            Safety::Safe => t!("safety.safe.hint"),
+            Safety::Moderate => t!("safety.moderate.hint"),
+            Safety::Caution => t!("safety.caution.hint"),
+        }
+    }
 
     /// Отмечать ли пункт, если пользователь его ещё ни разу не трогал.
     pub fn selected_by_default(self) -> bool {

@@ -121,6 +121,22 @@ pub fn set_language(code: &str) -> Result<(), LanguageError> {
     Ok(())
 }
 
+/// Включает язык `code` или, если он не задан, язык Windows.
+/// Если файла языка нет или он испорчен, включает язык Windows и возвращает текст ошибки.
+pub fn select_language(code: Option<&str>) -> Option<String> {
+    let code = match code {
+        Some(code) => code,
+        None => system_language(),
+    };
+    match set_language(code) {
+        Ok(()) => None,
+        Err(error) => {
+            let _ = set_language(system_language());
+            Some(t!("status.language_failed", code = code, error = error))
+        }
+    }
+}
+
 /// Язык интерфейса Windows, если для него есть встроенный перевод, иначе английский.
 pub fn system_language() -> &'static str {
     const LANG_RUSSIAN: u16 = 0x19;

@@ -15,7 +15,7 @@ mod report;
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::{self, Receiver, Sender};
+use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
 use std::sync::Arc;
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
@@ -91,6 +91,12 @@ impl CleanupJob {
     /// Все события, накопившиеся с прошлого вызова.
     pub fn poll_events(&self) -> Vec<CleanupEvent> {
         self.events.try_iter().collect()
+    }
+
+    /// Ждёт следующее событие не дольше `timeout` (для командной строки, где нет цикла окна).
+    /// `Disconnected` означает, что поток очистки завершился, не прислав `Finished`.
+    pub fn wait_event(&self, timeout: Duration) -> Result<CleanupEvent, RecvTimeoutError> {
+        self.events.recv_timeout(timeout)
     }
 }
 

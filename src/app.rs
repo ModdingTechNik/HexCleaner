@@ -11,15 +11,16 @@ use eframe::egui::{
     TextEdit, Ui, vec2,
 };
 
-use crate::catalog::{self, CleanupTask, Safety};
-use crate::cleaner::{
+use hexcleaner::catalog::{self, CleanupTask, Safety};
+use hexcleaner::cleaner::{
     self, CleanupEvent, CleanupJob, CleanupOptions, Location, Mode, TaskReport, TaskResult, format_size,
 };
-use crate::i18n::{self, LanguageInfo};
-use crate::presets::{self, ActivePreset, Selection};
-use crate::settings::{Settings, Theme};
-use crate::system::admin;
-use crate::t;
+use hexcleaner::i18n::{self, LanguageInfo};
+use hexcleaner::presets::{self, ActivePreset, Selection};
+use hexcleaner::settings::{Settings, Theme};
+use hexcleaner::system::admin;
+use hexcleaner::t;
+
 use crate::widgets::{dot, dot_atom, shield_atom, shield_icon};
 
 /// Цвета результатов, подобранные под тёмную и светлую темы.
@@ -151,12 +152,12 @@ impl HexCleanerApp {
     /// Отмечен ли пункт. Пункты, которые пользователь ещё не трогал, отмечены,
     /// если они входят в рекомендуемый набор.
     fn is_selected(&self, task: &CleanupTask) -> bool {
-        self.settings.is_selected(task.id).unwrap_or(task.safety.selected_by_default())
+        self.settings.is_task_selected(task)
     }
 
     /// Все отмеченные пункты, включая недоступные без прав администратора.
     fn current_selection(&self) -> Selection {
-        self.tasks.iter().filter(|task| self.is_selected(task)).map(|task| task.id.to_owned()).collect()
+        self.settings.selection(&self.tasks)
     }
 
     /// Расставляет галочки по набору — у всех пунктов, включая недоступные без прав.
@@ -403,7 +404,7 @@ impl HexCleanerApp {
                 let palette = Palette::of(ui);
                 // Справа налево: последний уровень оказывается крайним справа.
                 for level in Safety::ALL.into_iter().rev() {
-                    ui.label(safety_name(level)).on_hover_text(safety_hint(level));
+                    ui.label(level.name()).on_hover_text(level.hint());
                     dot(ui, palette.safety(level));
                     ui.add_space(6.0);
                 }
@@ -414,7 +415,7 @@ impl HexCleanerApp {
     fn preset_selector(&mut self, ui: &mut Ui) {
         let active = presets::find_active(&self.tasks, &self.settings.presets, &self.current_selection());
         let selected_text = match &active {
-            ActivePreset::BuiltIn(level) => preset_name(*level),
+            ActivePreset::BuiltIn(level) => presets::built_in_name(*level),
             ActivePreset::User(name) => name.clone(),
             ActivePreset::Custom => t!("presets.custom"),
         };
@@ -425,9 +426,9 @@ impl HexCleanerApp {
             for level in Safety::ALL {
                 let item = Button::selectable(
                     active == ActivePreset::BuiltIn(level),
-                    (dot_atom(palette.safety(level)), preset_name(level)),
+                    (dot_atom(palette.safety(level)), presets::built_in_name(level)),
                 );
-                if ui.add(item).on_hover_text(preset_hint(level)).clicked() {
+                if ui.add(item).on_hover_text(presets::built_in_hint(level)).clicked() {
                     action = Some(PresetAction::Apply(presets::built_in(&self.tasks, level)));
                 }
             }
@@ -533,7 +534,7 @@ impl HexCleanerApp {
         };
 
         let enabled = self.is_available(task) && !self.is_running();
-        let safety_line = t!("list.safety_line", level = safety_name(task.safety), hint = safety_hint(task.safety));
+        let safety_line = t!("list.safety_line", level = task.safety.name(), hint = task.safety.hint());
         let description = format!("{}\n\n{safety_line}", task.description());
         let response = ui
             .add_enabled(enabled, checkbox)
@@ -727,39 +728,6 @@ fn short_path(path: &Path) -> String {
 /// Заголовок окна на текущем языке.
 pub fn window_title(is_admin: bool) -> String {
     if is_admin { t!("window.title_admin") } else { t!("window.title") }
-}
-
-fn safety_name(safety: Safety) -> String {
-    match safety {
-        Safety::Safe => t!("safety.safe"),
-        Safety::Moderate => t!("safety.moderate"),
-        Safety::Caution => t!("safety.caution"),
-    }
-}
-
-fn safety_hint(safety: Safety) -> String {
-    match safety {
-        Safety::Safe => t!("safety.safe.hint"),
-        Safety::Moderate => t!("safety.moderate.hint"),
-        Safety::Caution => t!("safety.caution.hint"),
-    }
-}
-
-/// Название встроенного набора, который включает пункты не опаснее `level`.
-fn preset_name(level: Safety) -> String {
-    match level {
-        Safety::Safe => t!("presets.safe"),
-        Safety::Moderate => t!("presets.recommended"),
-        Safety::Caution => t!("presets.full"),
-    }
-}
-
-fn preset_hint(level: Safety) -> String {
-    match level {
-        Safety::Safe => t!("presets.safe.hint"),
-        Safety::Moderate => t!("presets.recommended.hint"),
-        Safety::Caution => t!("presets.full.hint"),
-    }
 }
 
 fn theme_name(theme: Theme) -> String {
