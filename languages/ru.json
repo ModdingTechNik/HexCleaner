@@ -73,6 +73,9 @@
     "status.language_failed": "Не удалось загрузить язык «{code}»: {error}",
     "status.broken_language_files": "Не удалось прочитать файлы языков: {files}",
 
+    "notify.clean_done": "Очистка завершена: удалено файлов {files}, освобождено {size}.",
+    "notify.analysis_done": "Анализ завершён: найдено файлов {files}, можно освободить {size}.",
+
     "language.not_found": "файл языка не найден",
     "language.invalid": "ошибка в файле {file}: {error}",
 

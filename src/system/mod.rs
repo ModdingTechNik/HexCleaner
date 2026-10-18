@@ -6,6 +6,7 @@ pub mod delete;
 pub mod event_log;
 pub mod locale;
 pub mod memory;
+pub mod notification;
 pub mod recycle_bin;
 pub mod restart_manager;
 pub mod services;

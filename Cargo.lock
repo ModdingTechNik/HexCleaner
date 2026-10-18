@@ -10,6 +10,7 @@ dependencies = [
  "eframe",
  "embed-resource",
  "glob",
+ "raw-window-handle",
  "resvg",
  "serde",
  "serde_json",

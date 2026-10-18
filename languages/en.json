@@ -73,6 +73,9 @@
     "status.language_failed": "Could not load language “{code}”: {error}",
     "status.broken_language_files": "Could not read language files: {files}",
 
+    "notify.clean_done": "Cleanup complete: {files} files deleted, {size} freed.",
+    "notify.analysis_done": "Analysis complete: {files} files found, {size} can be freed.",
+
     "language.not_found": "language file not found",
     "language.invalid": "error in file {file}: {error}",
 

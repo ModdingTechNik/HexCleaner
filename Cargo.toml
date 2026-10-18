@@ -20,6 +20,8 @@ path = "src/bin/cli.rs"
 
 [dependencies]
 eframe = "0.37"
+# Дескриптор окна для уведомлений Windows (та же версия, что у eframe).
+raw-window-handle = "0.6"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 chrono = "0.4"
@@ -36,6 +38,7 @@ windows = { version = "0.62", features = [
     "Win32_System_ProcessStatus",
     "Win32_System_RestartManager",
     "Win32_System_EventLog",
+    "Win32_System_LibraryLoader",
     "Win32_System_Services",
     "Win32_UI_Shell",
     "Win32_UI_WindowsAndMessaging",

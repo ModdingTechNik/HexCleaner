@@ -22,6 +22,8 @@ use hexcleaner::i18n::{self, LanguageInfo};
 use hexcleaner::presets::{self, ActivePreset, Selection};
 use hexcleaner::settings::{Settings, Theme};
 use hexcleaner::system::admin;
+use hexcleaner::system::notification::{self, Notification};
+use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 use hexcleaner::t;
 
 use crate::widgets::{dot, dot_atom, shield_atom, shield_icon};
@@ -115,6 +117,12 @@ pub struct HexCleanerApp {
     focus_preset_name: bool,
     /// Перед очисткой: поиск программ, которые ей мешают, и диалог с предложением их закрыть.
     programs_check: ProgramsCheck,
+    /// Дескриптор окна Windows — нужен для уведомлений.
+    window: Option<isize>,
+    /// Последнее уведомление о завершении. Его значок в области уведомлений живёт,
+    /// пока не придёт следующее уведомление или не закроется программа: если убрать
+    /// значок раньше, Windows уберёт и само сообщение.
+    notification: Option<Notification>,
 }
 
 /// Этап проверки программ, мешающих очистке.
@@ -158,6 +166,8 @@ impl HexCleanerApp {
             new_preset_name: None,
             focus_preset_name: false,
             programs_check: ProgramsCheck::Idle,
+            window: None,
+            notification: None,
         };
         app.refresh_languages();
         if let Some(error) = language_error {
@@ -375,8 +385,17 @@ impl HexCleanerApp {
                     self.status = Status::Finished { mode: self.mode, total, cancelled };
                     self.last_log = Some(log_path);
                     finished = true;
+                    let (files, size) = (total.deleted_files, format_size(total.freed_bytes));
+                    let text = match (self.mode, cancelled) {
+                        (Mode::Clean, false) => t!("notify.clean_done", files = files, size = size),
+                        (Mode::Clean, true) => t!("status.clean_stopped", files = files, size = size),
+                        (Mode::Analyze, false) => t!("notify.analysis_done", files = files, size = size),
+                        (Mode::Analyze, true) => t!("status.analysis_stopped", files = files, size = size),
+                    };
+                    self.notify(ctx, &text);
                 }
                 CleanupEvent::Failed(message) => {
+                    self.notify(ctx, &message);
                     self.status = Status::Error(message);
                     finished = true;
                 }
@@ -389,6 +408,20 @@ impl HexCleanerApp {
             // Пока идёт очистка, обновляем окно, чтобы счётчики «бежали».
             ctx.request_repaint_after(Duration::from_millis(100));
         }
+    }
+
+    /// Сообщает о завершении: в углу экрана появляется уведомление с итогом, а если окно
+    /// неактивно, его кнопка на панели задач мигает, пока окно не откроют.
+    fn notify(&mut self, ctx: &egui::Context, text: &str) {
+        let Some(window) = self.window else { return };
+        // Команды окна eframe выполняет только при отрисовке, а свёрнутое окно не рисуется, —
+        // поэтому мигание запрашиваем у Windows напрямую.
+        if !is_focused(ctx) {
+            notification::flash_taskbar(window);
+        }
+        // Предыдущее уведомление заменяем новым: значок в области уведомлений у окна один.
+        self.notification = None;
+        self.notification = Notification::show(window, &t!("app.name"), text);
     }
 
     /// Сумма по всем пунктам — для строки состояния во время очистки.
@@ -814,9 +847,17 @@ impl HexCleanerApp {
 }
 
 impl eframe::App for HexCleanerApp {
+    /// Вызывается и тогда, когда окно свёрнуто (а `ui` — нет): поэтому события очистки
+    /// обрабатываются здесь — иначе о завершении программа узнала бы, только когда окно развернут.
+    fn logic(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
+        if self.window.is_none() {
+            self.window = window_handle(frame);
+        }
+        self.process_cleanup_events(ctx);
+        self.poll_programs_check(ctx);
+    }
+
     fn ui(&mut self, ui: &mut Ui, _frame: &mut eframe::Frame) {
-        self.process_cleanup_events(ui.ctx());
-        self.poll_programs_check(ui.ctx());
         self.programs_dialog(ui.ctx());
 
         Panel::top("header").show(ui, |ui| {
@@ -862,6 +903,22 @@ fn short_path(path: &Path) -> String {
         }
     }
     full
+}
+
+/// Активно ли окно. Свёрнутое окно тоже неактивно.
+fn is_focused(ctx: &egui::Context) -> bool {
+    ctx.input(|input| {
+        let viewport = input.viewport();
+        viewport.focused.unwrap_or(true) && !viewport.minimized.unwrap_or(false)
+    })
+}
+
+/// Дескриптор окна Windows (HWND) — для уведомлений.
+fn window_handle(frame: &eframe::Frame) -> Option<isize> {
+    match frame.window_handle().ok()?.as_raw() {
+        RawWindowHandle::Win32(handle) => Some(handle.hwnd.get()),
+        _ => None,
+    }
 }
 
 /// Заголовок окна на текущем языке.

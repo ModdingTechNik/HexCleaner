@@ -75,6 +75,9 @@
     "status.checking_programs": "Перевіряю, чи не заважають очищенню запущені програми…",
     "status.closing_programs": "Закриваю програми, які заважають очищенню…",
 
+    "notify.clean_done": "Очищення завершено: видалено файлів {files}, звільнено {size}.",
+    "notify.analysis_done": "Аналіз завершено: знайдено файлів {files}, можна звільнити {size}.",
+
     "language.not_found": "файл мови не знайдено",
     "language.invalid": "помилка у файлі {file}: {error}",
 
