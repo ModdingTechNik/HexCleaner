@@ -10,15 +10,18 @@ mod widgets;
 
 use eframe::egui;
 
+use hexcleaner::cli::{self, ExitCode};
 use hexcleaner::settings::Settings;
-use hexcleaner::{i18n, schedule, system};
+use hexcleaner::{i18n, schedule, system, t};
+
+/// Имя программы в справке.
+const EXE_NAME: &str = "HexCleaner";
 
 fn main() -> eframe::Result {
-    // Плановая очистка из Планировщика заданий: та же команда, что у HexCleanerCli.exe,
-    // но без окна и без мелькающей консоли (см. hexcleaner::schedule).
+    // С параметрами окно не открывается: выполняем команду или показываем справку.
     let args: Vec<String> = std::env::args().skip(1).collect();
-    if args.first().map(String::as_str) == Some(schedule::SCHEDULED_FLAG) {
-        let exit_code = hexcleaner::cli::run(&args[1..]);
+    if !args.is_empty() {
+        let exit_code = run_with_arguments(&args);
         std::process::exit(exit_code as i32);
     }
 
@@ -44,4 +47,39 @@ fn main() -> eframe::Result {
         options,
         Box::new(move |cc| Ok(Box::new(app::HexCleanerApp::new(cc, settings, is_admin, language_error)))),
     )
+}
+
+/// Запуск с параметрами. Понимает только `--scheduled <команда>` и справку;
+/// на остальное отвечает ошибкой со справкой, а не открывает окно.
+fn run_with_arguments(args: &[String]) -> ExitCode {
+    let has_console = system::console::attach_parent_console();
+
+    // Плановая очистка из Планировщика заданий: те же команды, что у HexCleanerCli.exe,
+    // но без мелькающей консоли (см. hexcleaner::schedule).
+    if args[0] == schedule::SCHEDULED_FLAG {
+        return cli::run(&args[1..], &format!("{EXE_NAME} {}", schedule::SCHEDULED_FLAG));
+    }
+
+    if let Some(error) = i18n::select_language(Settings::load().language.as_deref()) {
+        eprintln!("{error}");
+    }
+    let help = t!("gui.help", exe = EXE_NAME, scheduled = schedule::SCHEDULED_FLAG);
+    let is_help = |arg: &String| matches!(arg.as_str(), "-h" | "--help" | "/?");
+    let (text, exit_code) = match args {
+        [arg] if is_help(arg) => (help, ExitCode::Success),
+        _ => {
+            let unknown = args.iter().find(|arg| !is_help(arg)).unwrap_or(&args[0]);
+            (format!("{}\n\n{help}", t!("gui.error.unknown_argument", value = unknown)), ExitCode::BadArguments)
+        }
+    };
+
+    let is_error = exit_code != ExitCode::Success;
+    if !has_console {
+        system::console::message_box(&t!("app.name"), &text, is_error);
+    } else if is_error {
+        eprintln!("{text}");
+    } else {
+        println!("{text}");
+    }
+    exit_code
 }

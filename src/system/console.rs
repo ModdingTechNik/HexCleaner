@@ -1,6 +1,7 @@
 //! Консоль: перехват Ctrl+C, чтобы командная строка остановила очистку аккуратно —
 //! с запуском остановленных служб и записью журнала, а не обрывала процесс на полпути,
-//! и защита стандартных потоков от подмены при закрытии программ.
+//! защита стандартных потоков от подмены при закрытии программ
+//! и вывод оконной программы, запущенной с параметрами.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -9,7 +10,8 @@ use windows::Win32::System::Console::{
     ATTACH_PARENT_PROCESS, AttachConsole, CTRL_BREAK_EVENT, CTRL_C_EVENT, GetConsoleWindow, GetStdHandle,
     STD_ERROR_HANDLE, STD_HANDLE, STD_INPUT_HANDLE, STD_OUTPUT_HANDLE, SetConsoleCtrlHandler, SetStdHandle,
 };
-use windows::core::BOOL;
+use windows::Win32::UI::WindowsAndMessaging::{MB_ICONERROR, MB_ICONINFORMATION, MB_OK, MessageBoxW};
+use windows::core::{BOOL, HSTRING};
 
 static CTRL_C_PRESSED: AtomicBool = AtomicBool::new(false);
 
@@ -46,6 +48,32 @@ pub fn preserve_std_handles<T>(action: impl FnOnce() -> T) -> T {
         }
     }
     result
+}
+
+/// Подключает оконную программу к консоли, из которой её запустили, чтобы её вывод было видно.
+///
+/// Возвращает `false`, если выводить некуда: программу запустили не из консоли
+/// (ярлыком, через «Выполнить», Планировщиком) и вывод не перенаправлен в файл.
+/// Консоль не ждёт оконную программу и уже напечатала приглашение, поэтому вывод
+/// начинается с новой строки.
+pub fn attach_parent_console() -> bool {
+    let output = unsafe { GetStdHandle(STD_OUTPUT_HANDLE) };
+    if output.is_ok_and(|handle| !handle.is_invalid()) {
+        return true;
+    }
+    let attached = unsafe { AttachConsole(ATTACH_PARENT_PROCESS).is_ok() };
+    if attached {
+        println!();
+    }
+    attached
+}
+
+/// Показывает текст в окне сообщения — для оконной программы, которой некуда его напечатать.
+pub fn message_box(title: &str, text: &str, is_error: bool) {
+    let icon = if is_error { MB_ICONERROR } else { MB_ICONINFORMATION };
+    unsafe {
+        MessageBoxW(None, &HSTRING::from(text), &HSTRING::from(title), MB_OK | icon);
+    }
 }
 
 unsafe extern "system" fn handle_ctrl(ctrl_type: u32) -> BOOL {

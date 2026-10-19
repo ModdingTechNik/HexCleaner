@@ -1,4 +1,5 @@
 //! Командная строка: `HexCleanerCli analyze | clean | list | help`.
+//! Те же команды выполняет и окно с ключом `--scheduled` (см. `hexcleaner::schedule`).
 //!
 //! Работает на том же движке, что и окно, и с теми же настройками: отмеченными пунктами,
 //! своими наборами, языком и сжатием журналов. Настройки только читаются.
@@ -7,7 +8,6 @@
 mod args;
 mod selection;
 
-use std::fmt;
 use std::io::Write;
 use std::path::Path;
 use std::sync::Arc;
@@ -24,9 +24,6 @@ use crate::system::{admin, console};
 use crate::{i18n, t};
 
 use args::{Command, RunRequest};
-
-/// Имя программы в справке и сообщениях об ошибках.
-const EXE_NAME: &str = "HexCleanerCli";
 
 /// Как часто проверять, не нажат ли Ctrl+C, пока идёт очистка.
 const CTRL_C_CHECK_INTERVAL: Duration = Duration::from_millis(200);
@@ -58,23 +55,25 @@ pub enum UsageError {
     NothingSelected,
 }
 
-impl fmt::Display for UsageError {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        let text = match self {
-            UsageError::UnknownCommand(value) => t!("cli.error.unknown_command", value = value, exe = EXE_NAME),
-            UsageError::UnknownOption(value) => t!("cli.error.unknown_option", value = value, exe = EXE_NAME),
+impl UsageError {
+    /// Текст ошибки; `exe` — как запускать команды, для подсказок вида «Справка: {exe} help».
+    fn message(&self, exe: &str) -> String {
+        match self {
+            UsageError::UnknownCommand(value) => t!("cli.error.unknown_command", value = value, exe = exe),
+            UsageError::UnknownOption(value) => t!("cli.error.unknown_option", value = value, exe = exe),
             UsageError::MissingValue(option) => t!("cli.error.missing_value", option = option),
             UsageError::OptionNotForCommand(option) => t!("cli.error.option_not_for_command", option = option),
-            UsageError::UnknownPreset(name) => t!("cli.error.unknown_preset", name = name, exe = EXE_NAME),
-            UsageError::UnknownTask(id) => t!("cli.error.unknown_task", id = id, exe = EXE_NAME),
+            UsageError::UnknownPreset(name) => t!("cli.error.unknown_preset", name = name, exe = exe),
+            UsageError::UnknownTask(id) => t!("cli.error.unknown_task", id = id, exe = exe),
             UsageError::NothingSelected => t!("cli.error.nothing_selected"),
-        };
-        f.write_str(&text)
+        }
     }
 }
 
 /// Выполняет команду (`args` — параметры без имени программы) и возвращает код возврата.
-pub fn run(args: &[String]) -> ExitCode {
+/// `exe` — как запускать команды: так программа называется в справке и сообщениях об ошибках,
+/// например `HexCleanerCli` или `HexCleaner --scheduled`.
+pub fn run(args: &[String], exe: &str) -> ExitCode {
     let settings = Settings::load();
     if let Some(error) = i18n::select_language(settings.language.as_deref()) {
         eprintln!("{error}");
@@ -83,7 +82,7 @@ pub fn run(args: &[String]) -> ExitCode {
     let arguments = match args::parse(args) {
         Ok(arguments) => arguments,
         Err(error) => {
-            eprintln!("{error}");
+            eprintln!("{}", error.message(exe));
             return ExitCode::BadArguments;
         }
     };
@@ -95,14 +94,14 @@ pub fn run(args: &[String]) -> ExitCode {
 
     match arguments.command {
         Command::Help => {
-            println!("{}", t!("cli.help", exe = EXE_NAME));
+            println!("{}", t!("cli.help", exe = exe));
             ExitCode::Success
         }
         Command::List => {
             print_list(&settings);
             ExitCode::Success
         }
-        Command::Run(request) => run_cleanup(&request, &settings),
+        Command::Run(request) => run_cleanup(&request, &settings, exe),
     }
 }
 
@@ -134,12 +133,12 @@ fn print_list(settings: &Settings) {
 }
 
 /// Анализ или очистка с выводом хода работы.
-fn run_cleanup(request: &RunRequest, settings: &Settings) -> ExitCode {
+fn run_cleanup(request: &RunRequest, settings: &Settings, exe: &str) -> ExitCode {
     let tasks = Arc::new(catalog::all_tasks());
     let selected = match selection::resolve(&request.choice, &tasks, settings) {
         Ok(selected) => selected,
         Err(error) => {
-            eprintln!("{error}");
+            eprintln!("{}", error.message(exe));
             return ExitCode::BadArguments;
         }
     };
