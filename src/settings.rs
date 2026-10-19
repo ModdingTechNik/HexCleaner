@@ -12,6 +12,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::catalog::CleanupTask;
 use crate::presets::{Selection, UserPreset};
+use crate::schedule::Schedule;
 
 /// Тема оформления.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -32,6 +33,9 @@ pub struct Settings {
     selected: BTreeMap<String, bool>,
     /// Наборы галочек, сохранённые пользователем.
     pub presets: Vec<UserPreset>,
+    /// Задания плановой очистки. Сами задания живут в Планировщике заданий Windows,
+    /// здесь — их описание, по которому их можно создать заново.
+    pub schedules: Vec<Schedule>,
     /// Сжимать ли журналы прошлых очисток в zip-архивы.
     pub compress_old_logs: bool,
     /// Код языка (имя файла перевода). `None` — язык Windows.
@@ -44,6 +48,7 @@ impl Default for Settings {
         Self {
             selected: BTreeMap::new(),
             presets: Vec::new(),
+            schedules: Vec::new(),
             compress_old_logs: true,
             language: None,
             theme: Theme::default(),

@@ -27,6 +27,7 @@ use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 use hexcleaner::t;
 
 use crate::progress::{CleanupProgress, TaskProgress, cleanup_progress};
+use crate::schedule_tab::ScheduleTab;
 use crate::widgets::{dot, dot_atom, shield_atom, shield_icon};
 
 /// Цвета результатов, подобранные под тёмную и светлую темы.
@@ -87,6 +88,13 @@ enum TaskState {
     Skipped,
 }
 
+/// Вкладки окна.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Tab {
+    Cleanup,
+    Schedule,
+}
+
 /// Строка состояния внизу окна.
 enum Status {
     Ready,
@@ -129,6 +137,8 @@ pub struct HexCleanerApp {
     analysis: Vec<Option<TaskReport>>,
     /// Итоги анализа для пунктов текущей очистки; у остальных пунктов — `None`.
     expected: Vec<Option<TaskReport>>,
+    tab: Tab,
+    schedule_tab: ScheduleTab,
 }
 
 /// Этап проверки программ, мешающих очистке.
@@ -177,6 +187,8 @@ impl HexCleanerApp {
             notification: None,
             analysis: vec![None; task_count],
             expected: vec![None; task_count],
+            tab: Tab::Cleanup,
+            schedule_tab: ScheduleTab::default(),
         };
         app.refresh_languages();
         if let Some(error) = language_error {
@@ -934,9 +946,24 @@ impl eframe::App for HexCleanerApp {
             ui.add_space(6.0);
             self.header(ui);
             ui.add_space(6.0);
+            ui.horizontal(|ui| {
+                ui.selectable_value(&mut self.tab, Tab::Cleanup, t!("tabs.cleanup"));
+                ui.selectable_value(&mut self.tab, Tab::Schedule, t!("tabs.schedule"));
+            });
+            ui.add_space(4.0);
         });
-        Panel::bottom("footer").show(ui, |ui| self.footer(ui));
-        CentralPanel::default().show(ui, |ui| self.task_list(ui));
+
+        match self.tab {
+            Tab::Cleanup => {
+                Panel::bottom("footer").show(ui, |ui| self.footer(ui));
+                CentralPanel::default().show(ui, |ui| self.task_list(ui));
+            }
+            Tab::Schedule => {
+                CentralPanel::default().show(ui, |ui| {
+                    self.schedule_tab.ui(ui, &mut self.settings, &self.tasks, self.is_admin);
+                });
+            }
+        }
     }
 }
 

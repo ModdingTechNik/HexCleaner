@@ -5,14 +5,23 @@
 
 mod app;
 mod progress;
+mod schedule_tab;
 mod widgets;
 
 use eframe::egui;
 
 use hexcleaner::settings::Settings;
-use hexcleaner::{i18n, system};
+use hexcleaner::{i18n, schedule, system};
 
 fn main() -> eframe::Result {
+    // Плановая очистка из Планировщика заданий: та же команда, что у HexCleanerCli.exe,
+    // но без окна и без мелькающей консоли (см. hexcleaner::schedule).
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    if args.first().map(String::as_str) == Some(schedule::SCHEDULED_FLAG) {
+        let exit_code = hexcleaner::cli::run(&args[1..]);
+        std::process::exit(exit_code as i32);
+    }
+
     let is_admin = system::admin::is_elevated();
     let settings = Settings::load();
 

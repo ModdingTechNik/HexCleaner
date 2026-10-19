@@ -10,6 +10,7 @@ pub mod notification;
 pub mod recycle_bin;
 pub mod restart_manager;
 pub mod services;
+pub mod task_scheduler;
 
 use windows::Win32::Foundation::{CloseHandle, HANDLE};
 
