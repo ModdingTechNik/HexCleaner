@@ -6,6 +6,8 @@
 mod app;
 mod progress;
 mod schedule_tab;
+mod settings_tab;
+mod update_ui;
 mod widgets;
 
 use eframe::egui;

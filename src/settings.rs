@@ -1,4 +1,4 @@
-//! Сохранение выбранных пунктов, наборов галочек, языка и темы между запусками.
+//! Сохранение выбранных пунктов, наборов галочек, языка, темы и других настроек между запусками.
 //!
 //! Настройки хранятся в `%APPDATA%\HexCleaner\settings.json`. Благодаря этому выбор
 //! пунктов, требующих прав администратора, не теряется при запуске без прав
@@ -13,6 +13,7 @@ use serde::{Deserialize, Serialize};
 use crate::catalog::CleanupTask;
 use crate::presets::{Selection, UserPreset};
 use crate::schedule::Schedule;
+use crate::update::UpdateSettings;
 
 /// Тема оформления.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -41,6 +42,11 @@ pub struct Settings {
     /// Код языка (имя файла перевода). `None` — язык Windows.
     pub language: Option<String>,
     pub theme: Theme,
+    /// Всплывающее уведомление, когда анализ или очистка закончились.
+    pub notify_when_done: bool,
+    /// Мигать кнопкой на панели задач, если окно неактивно, когда анализ или очистка закончились.
+    pub flash_taskbar: bool,
+    pub updates: UpdateSettings,
 }
 
 impl Default for Settings {
@@ -52,6 +58,9 @@ impl Default for Settings {
             compress_old_logs: true,
             language: None,
             theme: Theme::default(),
+            notify_when_done: true,
+            flash_taskbar: true,
+            updates: UpdateSettings::default(),
         }
     }
 }

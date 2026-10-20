@@ -10,7 +10,7 @@ use std::time::Duration;
 use eframe::egui::collapsing_header::CollapsingState;
 use eframe::egui::{
     self, Align, Button, CentralPanel, Checkbox, Color32, ComboBox, Grid, Id, Key, Label, Layout, Modal, Panel,
-    ProgressBar, RichText, ScrollArea, TextEdit, Ui, vec2,
+    ProgressBar, RichText, ScrollArea, TextEdit, TextStyle, TextWrapMode, Ui, WidgetText, vec2,
 };
 
 use hexcleaner::catalog::{self, CleanupTask, Safety};
@@ -18,9 +18,8 @@ use hexcleaner::cleaner::{
     self, BlockingApp, CleanupEvent, CleanupJob, CleanupOptions, Location, Mode, TaskReport, TaskResult,
     find_blocking_apps, format_size,
 };
-use hexcleaner::i18n::{self, LanguageInfo};
 use hexcleaner::presets::{self, ActivePreset, Selection};
-use hexcleaner::settings::{Settings, Theme};
+use hexcleaner::settings::Settings;
 use hexcleaner::system::admin;
 use hexcleaner::system::notification::{self, Notification};
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
@@ -28,6 +27,8 @@ use hexcleaner::t;
 
 use crate::progress::{CleanupProgress, TaskProgress, cleanup_progress};
 use crate::schedule_tab::ScheduleTab;
+use crate::settings_tab::{SettingsTab, egui_theme};
+use crate::update_ui::Updater;
 use crate::widgets::{dot, dot_atom, shield_atom, shield_icon};
 
 /// Цвета результатов, подобранные под тёмную и светлую темы.
@@ -74,6 +75,12 @@ enum PresetAction {
     StartSaving,
 }
 
+/// Высота кнопок внизу вкладки «Очистка».
+const FOOTER_BUTTON_HEIGHT: f32 = 30.0;
+
+/// Ширина кнопок «Начать очистку» и «Остановить».
+const CLEAN_BUTTON_WIDTH: f32 = 150.0;
+
 /// Сколько папок показывать в разбивке пункта; полный список — в журнале.
 const MAX_SHOWN_LOCATIONS: usize = 15;
 
@@ -93,6 +100,7 @@ enum TaskState {
 enum Tab {
     Cleanup,
     Schedule,
+    Settings,
 }
 
 /// Строка состояния внизу окна.
@@ -118,8 +126,6 @@ pub struct HexCleanerApp {
     mode: Mode,
     status: Status,
     last_log: Option<PathBuf>,
-    /// Языки для списка выбора: встроенные и найденные в папке языков.
-    languages: Vec<LanguageInfo>,
     /// Название нового набора, пока пользователь его вводит.
     new_preset_name: Option<String>,
     /// Поставить курсор в поле названия набора (один раз, когда поле появилось).
@@ -139,6 +145,8 @@ pub struct HexCleanerApp {
     expected: Vec<Option<TaskReport>>,
     tab: Tab,
     schedule_tab: ScheduleTab,
+    settings_tab: SettingsTab,
+    updater: Updater,
 }
 
 /// Этап проверки программ, мешающих очистке.
@@ -179,7 +187,6 @@ impl HexCleanerApp {
             mode: Mode::Clean,
             status: Status::Ready,
             last_log: None,
-            languages: Vec::new(),
             new_preset_name: None,
             focus_preset_name: false,
             programs_check: ProgramsCheck::Idle,
@@ -189,16 +196,24 @@ impl HexCleanerApp {
             expected: vec![None; task_count],
             tab: Tab::Cleanup,
             schedule_tab: ScheduleTab::default(),
+            settings_tab: SettingsTab::new(),
+            updater: Updater::new(),
         };
-        app.refresh_languages();
+        app.updater.check_on_start(&app.settings);
         if let Some(error) = language_error {
             app.status = Status::Error(error);
         }
         app
     }
 
-    /// Идёт очистка, анализ или подготовка к ним (поиск программ, диалог).
+    /// Идёт очистка, анализ или подготовка к ним (поиск программ, диалог),
+    /// или устанавливается обновление — после него программа перезапустится.
     fn is_running(&self) -> bool {
+        self.is_cleaning() || self.updater.is_installing()
+    }
+
+    /// Идёт очистка, анализ или подготовка к ним — обновляться нельзя.
+    fn is_cleaning(&self) -> bool {
         self.job.is_some() || !matches!(self.programs_check, ProgramsCheck::Idle)
     }
 
@@ -354,37 +369,6 @@ impl HexCleanerApp {
         }
     }
 
-    /// Перечитывает список языков, чтобы в нём появились новые файлы из папки языков.
-    fn refresh_languages(&mut self) {
-        let (languages, broken_files) = i18n::available_languages();
-        self.languages = languages;
-        if !broken_files.is_empty() {
-            self.status = Status::Error(t!("status.broken_language_files", files = broken_files.join(", ")));
-        }
-    }
-
-    fn change_language(&mut self, ctx: &egui::Context, code: String) {
-        match i18n::set_language(&code) {
-            Ok(()) => {
-                self.settings.language = Some(code);
-                self.settings.save();
-                ctx.send_viewport_cmd(egui::ViewportCommand::Title(window_title(self.is_admin)));
-            }
-            Err(error) => self.status = Status::Error(t!("status.language_failed", code = code, error = error)),
-        }
-    }
-
-    fn change_theme(&mut self, ctx: &egui::Context, theme: Theme) {
-        self.settings.theme = theme;
-        self.settings.save();
-        ctx.set_theme(egui_theme(theme));
-    }
-
-    /// Код языка, который сейчас включён.
-    fn current_language(&self) -> String {
-        self.settings.language.clone().unwrap_or_else(|| i18n::system_language().to_owned())
-    }
-
     /// Выбрать или снять все пункты, доступные при текущих правах.
     /// Выбор недоступных пунктов не меняется, чтобы не потерять его.
     fn set_all_available(&mut self, selected: bool) {
@@ -443,16 +427,28 @@ impl HexCleanerApp {
 
     /// Сообщает о завершении: в углу экрана появляется уведомление с итогом, а если окно
     /// неактивно, его кнопка на панели задач мигает, пока окно не откроют.
+    /// И то и другое можно отключить во вкладке «Настройки».
     fn notify(&mut self, ctx: &egui::Context, text: &str) {
         let Some(window) = self.window else { return };
         // Команды окна eframe выполняет только при отрисовке, а свёрнутое окно не рисуется, —
         // поэтому мигание запрашиваем у Windows напрямую.
-        if !is_focused(ctx) {
+        if self.settings.flash_taskbar && !is_focused(ctx) {
             notification::flash_taskbar(window);
         }
         // Предыдущее уведомление заменяем новым: значок в области уведомлений у окна один.
         self.notification = None;
-        self.notification = Notification::show(window, &t!("app.name"), text);
+        if self.settings.notify_when_done {
+            self.notification = Notification::show(window, &t!("app.name"), text);
+        }
+    }
+
+    /// Новая версия установлена: запускаем её вместо себя.
+    fn restart_after_update(&mut self, ctx: &egui::Context, exe: &Path) {
+        self.settings.save();
+        match Command::new(exe).spawn() {
+            Ok(_) => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
+            Err(_) => self.status = Status::Error(t!("update.restart_failed")),
+        }
     }
 
     /// После анализа запоминает его итоги для прогресса следующей очистки,
@@ -521,69 +517,11 @@ impl HexCleanerApp {
                     }
                 }
 
-                ui.separator();
-                // Во время очистки язык не меняем: журнал пишется на одном языке.
-                ui.add_enabled_ui(!self.is_running(), |ui| {
-                    self.theme_selector(ui);
-                    self.language_selector(ui);
-                });
-
                 ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
                     ui.add(Label::new(RichText::new(t!("header.subtitle")).weak()).truncate());
                 });
             });
         });
-    }
-
-    fn theme_selector(&mut self, ui: &mut Ui) {
-        let mut theme = self.settings.theme;
-        ComboBox::from_id_salt("theme")
-            .selected_text(theme_name(theme))
-            .show_ui(ui, |ui| {
-                for option in [Theme::Dark, Theme::Light, Theme::System] {
-                    ui.selectable_value(&mut theme, option, theme_name(option));
-                }
-            })
-            .response
-            .on_hover_text(t!("header.theme.hint"));
-
-        if theme != self.settings.theme {
-            self.change_theme(ui.ctx(), theme);
-        }
-    }
-
-    fn language_selector(&mut self, ui: &mut Ui) {
-        let current = self.current_language();
-        let current_name = self
-            .languages
-            .iter()
-            .find(|language| language.code == current)
-            .map_or(current.clone(), |language| language.name.clone());
-
-        let mut chosen = None;
-        let combo = ComboBox::from_id_salt("language").selected_text(current_name).show_ui(ui, |ui| {
-            for language in &self.languages {
-                if ui.selectable_label(language.code == current, &language.name).clicked() {
-                    chosen = Some(language.code.clone());
-                }
-            }
-            ui.separator();
-            let folder = ui.button(t!("header.languages_folder")).on_hover_text(t!("header.languages_folder.hint"));
-            if folder.clicked() {
-                i18n::export_built_in_languages();
-                open_in_explorer(&i18n::languages_directory());
-            }
-        });
-
-        // Список перечитывается при каждом открытии — так подхватываются новые файлы переводов.
-        if combo.response.clicked() {
-            self.refresh_languages();
-        }
-        combo.response.on_hover_text(t!("header.language.hint"));
-
-        if let Some(code) = chosen {
-            self.change_language(ui.ctx(), code);
-        }
     }
 
     fn task_list(&mut self, ui: &mut Ui) {
@@ -814,7 +752,7 @@ impl HexCleanerApp {
         ui.add_space(6.0);
         ui.horizontal(|ui| {
             if let Some(job) = &self.job {
-                if ui.add(Button::new(t!("footer.stop")).min_size(vec2(150.0, 30.0))).clicked() {
+                if ui.add(Button::new(t!("footer.stop")).min_size(vec2(CLEAN_BUTTON_WIDTH, FOOTER_BUTTON_HEIGHT))).clicked() {
                     job.cancel();
                 }
             } else {
@@ -823,35 +761,28 @@ impl HexCleanerApp {
                     .iter()
                     .any(|task| self.is_available(task) && self.is_selected(task));
 
-                let analyze = Button::new(t!("footer.analyze")).min_size(vec2(110.0, 30.0));
+                let analyze = Button::new(t!("footer.analyze")).min_size(vec2(110.0, FOOTER_BUTTON_HEIGHT));
                 let response = ui.add_enabled(has_selection, analyze).on_hover_text(t!("footer.analyze.hint"));
                 let can_start = has_selection && !self.is_running();
                 if response.clicked() && can_start {
                     self.start(Mode::Analyze, Vec::new(), false);
                 }
 
-                let clean = Button::new(RichText::new(t!("footer.clean")).strong()).min_size(vec2(150.0, 30.0));
+                let clean = Button::new(clean_label()).min_size(vec2(CLEAN_BUTTON_WIDTH, FOOTER_BUTTON_HEIGHT));
                 if ui.add_enabled(can_start, clean).clicked() {
                     self.check_programs_and_clean();
                 }
             }
 
             if let Some(log_path) = &self.last_log
-                && ui.button(t!("footer.open_log")).clicked()
+                && ui.add(side_button(ui, t!("footer.open_log"))).clicked()
             {
                 open_in_explorer(log_path);
             }
-            if ui.button(t!("footer.logs_folder")).clicked() {
+            if ui.add(side_button(ui, t!("footer.logs_folder"))).clicked() {
                 let dir = cleaner::logs_directory();
                 let _ = std::fs::create_dir_all(&dir);
                 open_in_explorer(&dir);
-            }
-
-            let enabled = !self.is_running();
-            let compress = Checkbox::new(&mut self.settings.compress_old_logs, t!("footer.compress_logs"));
-            let response = ui.add_enabled(enabled, compress).on_hover_text(t!("footer.compress_logs.hint"));
-            if response.changed() {
-                self.settings.save();
             }
         });
 
@@ -937,10 +868,18 @@ impl eframe::App for HexCleanerApp {
         }
         self.process_cleanup_events(ctx);
         self.poll_programs_check(ctx);
+        if let Some(exe) = self.updater.poll(ctx, &mut self.settings) {
+            self.restart_after_update(ctx, &exe);
+        }
     }
 
     fn ui(&mut self, ui: &mut Ui, _frame: &mut eframe::Frame) {
         self.programs_dialog(ui.ctx());
+        // Предложение обновиться не перекрывает диалог закрытия программ.
+        if matches!(self.programs_check, ProgramsCheck::Idle) {
+            let busy = self.is_cleaning();
+            self.updater.dialog(ui.ctx(), &mut self.settings, busy);
+        }
 
         Panel::top("header").show(ui, |ui| {
             ui.add_space(6.0);
@@ -949,6 +888,7 @@ impl eframe::App for HexCleanerApp {
             ui.horizontal(|ui| {
                 ui.selectable_value(&mut self.tab, Tab::Cleanup, t!("tabs.cleanup"));
                 ui.selectable_value(&mut self.tab, Tab::Schedule, t!("tabs.schedule"));
+                ui.selectable_value(&mut self.tab, Tab::Settings, t!("tabs.settings"));
             });
             ui.add_space(4.0);
         });
@@ -963,8 +903,29 @@ impl eframe::App for HexCleanerApp {
                     self.schedule_tab.ui(ui, &mut self.settings, &self.tasks, self.is_admin);
                 });
             }
+            Tab::Settings => {
+                let busy = self.is_running();
+                CentralPanel::default().show(ui, |ui| {
+                    self.settings_tab.ui(ui, &mut self.settings, &mut self.updater, self.is_admin, busy);
+                });
+            }
         }
     }
+}
+
+fn clean_label() -> RichText {
+    RichText::new(t!("footer.clean")).strong()
+}
+
+/// Кнопка «Открыть журнал» или «Папка журналов»: той же высоты, что «Начать очистку»,
+/// и с тем же отступом текста от краёв.
+fn side_button(ui: &Ui, text: String) -> Button<'static> {
+    let text_width = |text: WidgetText| {
+        text.into_galley(ui, Some(TextWrapMode::Extend), f32::INFINITY, TextStyle::Button).size().x
+    };
+    let padding = ((CLEAN_BUTTON_WIDTH - text_width(clean_label().into())) / 2.0).max(ui.spacing().button_padding.x);
+    let width = text_width(text.clone().into()) + 2.0 * padding;
+    Button::new(text).min_size(vec2(width, FOOTER_BUTTON_HEIGHT))
 }
 
 /// Таблица «объём — число файлов — папка» для раскрытого пункта.
@@ -1023,24 +984,8 @@ pub fn window_title(is_admin: bool) -> String {
     if is_admin { t!("window.title_admin") } else { t!("window.title") }
 }
 
-fn theme_name(theme: Theme) -> String {
-    match theme {
-        Theme::Dark => t!("theme.dark"),
-        Theme::Light => t!("theme.light"),
-        Theme::System => t!("theme.system"),
-    }
-}
-
-fn egui_theme(theme: Theme) -> egui::ThemePreference {
-    match theme {
-        Theme::Dark => egui::ThemePreference::Dark,
-        Theme::Light => egui::ThemePreference::Light,
-        Theme::System => egui::ThemePreference::System,
-    }
-}
-
 /// Открывает файл в программе по умолчанию или папку в проводнике.
-fn open_in_explorer(path: &Path) {
+pub fn open_in_explorer(path: &Path) {
     let _ = Command::new("explorer").arg(path).spawn();
 }
 

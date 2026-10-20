@@ -6,6 +6,7 @@
 //! * [`presets`] — наборы галочек;
 //! * [`schedule`] — плановая очистка: задания для Планировщика заданий Windows;
 //! * [`settings`] — настройки, общие для окна и командной строки;
+//! * [`update`] — обновление программы из релизов GitHub;
 //! * [`i18n`] — переводы, макрос [`t!`];
 //! * [`cli`] — команды и параметры командной строки;
 //! * [`system`] — обёртки над Windows API, весь `unsafe`.
@@ -18,3 +19,4 @@ pub mod presets;
 pub mod schedule;
 pub mod settings;
 pub mod system;
+pub mod update;

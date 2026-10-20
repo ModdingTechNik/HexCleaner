@@ -1,64 +1,68 @@
 # HexCleaner
 
-Очистка мусорных файлов и кэшей Windows. Написана на Rust, интерфейс на [egui](https://github.com/emilk/egui).
+**English** | [Русский](README.ru.md) | [Українська](README.uk.md)
 
-Программа удаляет только кэши, временные файлы, журналы и отчёты об ошибках.
-Документы, сохранения игр, а также cookies, пароли и историю браузеров она не трогает.
-Корзина очищается, только если отдельно отмечен пункт «Очистка корзины» (по умолчанию он выключен).
+A cleaner for Windows junk files and caches. Written in Rust, with an [egui](https://github.com/emilk/egui) interface.
 
-## Сборка
+HexCleaner deletes only caches, temporary files, logs and error reports.
+It never touches documents, game saves, or browser cookies, passwords and history.
+The Recycle Bin is emptied only if the "Empty the Recycle Bin" item is checked (it is off by default).
+
+**Download:** [latest release](https://github.com/ModdingTechNik/HexCleaner/releases/latest) ·
+**Support the project:** [Patreon](https://patreon.com/ModdingTechNik)
+
+## Building
 
 ```bash
 cargo build --release
 ```
 
-Получаются две программы:
+This produces two programs:
 
-* `target/release/HexCleaner.exe` — окно;
-* `target/release/HexCleanerCli.exe` — командная строка (для скриптов и планировщика Windows).
+* `target/release/HexCleaner.exe` — the window;
+* `target/release/HexCleanerCli.exe` — the command line (for scripts and Windows Task Scheduler).
 
-Обе работают на одном ядре и с одними настройками.
+Both run on the same core and share the same settings.
 
-## Как это работает
+## How it works
 
-* Пункты со значком щита требуют прав администратора. Без прав они неактивны и при очистке
-  пропускаются, но галочки на них запоминаются. Кнопка «Запустить от администратора»
-  перезапускает программу через UAC.
-* У каждого пункта есть уровень безопасности — цветная точка в списке:
-  🟢 «Безопасно» (временные файлы и кэши, всё пересоздаётся само),
-  🟡 «Умеренно» (что-то придётся скачать заново или пропадут данные для диагностики),
-  🔴 «Осторожно» (журналы событий, история Защитника, файлы для восстановления программ).
-* Наборы галочек: встроенные «Только безопасное», «Рекомендуемый» (безопасное и умеренное)
-  и «Полный» строятся по уровням безопасности. Текущий выбор можно сохранить как свой набор
-  и потом применять или удалять. Пункты, которые ещё ни разу не трогали, отмечены
-  по рекомендуемому набору.
-* Кнопка «Анализ» ничего не удаляет и не меняет: обходит те же папки по тем же правилам
-  и показывает, сколько мусора найдено в каждом пункте. Пункт можно раскрыть
-  и увидеть папки с объёмом и числом файлов (клик по папке открывает её в проводнике).
-  Итоги анализа пишутся в отчёт `analysis_….log`. Если после анализа начать очистку,
-  внизу окна видна полоса прогресса: сколько файлов из найденных уже удалено.
-* Выбор пунктов, свои наборы, язык и тема (тёмная, светлая или как в Windows) хранятся
-  в `%APPDATA%\HexCleaner\settings.json`. При первом запуске язык берётся из настроек Windows.
-* Каждая очистка пишет журнал в `%LOCALAPPDATA%\HexCleaner\logs`: в него попадают все
-  удалённые файлы с размерами, ошибки и итоги по каждому пункту. Если стоит галочка
-  «Сжимать прошлые журналы» (включена по умолчанию), перед новой очисткой журналы прошлых
-  очисток упаковываются в zip-архивы (по одному на журнал).
-* Занятые файлы пропускаются. Временные файлы моложе часа не удаляются.
-* Перед очисткой программа проверяет через Restart Manager, не держат ли файлы выбранных пунктов
-  запущенные браузеры или лаунчеры (Steam, Epic), и предлагает их закрыть — с галочками
-  и возможностью запустить снова после очистки. Закрываются они корректно, как при выходе
-  из Windows (браузеры сохраняют вкладки), ничего не завершается принудительно.
-  Предлагаются только программы из списка `programs_to_close` пункта: общие папки
-  (кэш шейдеров видеокарты, `INetCache`) держат и посторонние программы, и компоненты Windows.
-* Для каждого файла, который не удалось удалить, журнал называет причину: например,
-  «занят процессом chrome.exe (PID 1234)», «запущен или загружен как библиотека»,
-  «нет прав, владелец NT SERVICE\TrustedInstaller». Процессы-блокировщики ищутся через
-  Restart Manager не больше 200 раз за пункт, чтобы не замедлять очистку.
-* Символические ссылки и точки соединения (junction) не открываются, поэтому через них
-  невозможно добраться до чужих файлов. Корни дисков, профиль пользователя, Windows,
-  Program Files и подобные папки защищены от очистки, даже если в каталоге окажется ошибка.
+* Items with a shield icon need administrator rights. Without them they are disabled and skipped
+  during cleanup, but their checkboxes are remembered. The "Run as administrator" button
+  restarts the program through UAC.
+* Every item has a safety level — a colored dot in the list:
+  🟢 "Safe" (temporary files and caches, everything is recreated automatically),
+  🟡 "Moderate" (something will be downloaded again or diagnostic data is lost),
+  🔴 "Caution" (event logs, Defender history, files used to repair installed programs).
+* Presets: the built-in "Safe only", "Recommended" (safe and moderate) and "Full" are built
+  from the safety levels. The current selection can be saved as your own preset and later
+  applied or deleted. Items you have never touched are checked according to the recommended preset.
+* The "Analyze" button deletes and changes nothing: it walks the same folders by the same rules
+  and shows how much junk each item contains. An item can be expanded to see its folders with
+  their size and file count (clicking a folder opens it in Explorer). Analysis results are written
+  to an `analysis_….log` report. If you start a cleanup after an analysis, a progress bar at the
+  bottom of the window shows how many of the found files have already been deleted.
+* The item selection, your presets and everything on the "Settings" tab are stored in
+  `%APPDATA%\HexCleaner\settings.json`. On first launch the language is taken from Windows settings.
+* Every cleanup writes a log to `%LOCALAPPDATA%\HexCleaner\logs`: all deleted files with their
+  sizes, errors and totals for each item. If "Compress previous logs" is checked in the settings
+  (on by default), logs of previous cleanups are packed into zip archives (one per log)
+  before a new cleanup.
+* Files in use are skipped. Temporary files younger than an hour are not deleted.
+* Before cleaning, the program uses Restart Manager to check whether running browsers or launchers
+  (Steam, Epic) hold files of the selected items, and offers to close them — with checkboxes and
+  an option to start them again after the cleanup. They are closed gracefully, the same way as
+  when Windows shuts down (browsers keep their tabs); nothing is killed.
+  Only programs from the item's `programs_to_close` list are offered: shared folders
+  (the GPU shader cache, `INetCache`) are also held by unrelated programs and Windows components.
+* For every file that could not be deleted, the log gives the reason, for example
+  "in use by chrome.exe (PID 1234)", "running or loaded as a library",
+  "access denied, owner NT SERVICE\TrustedInstaller". Blocking processes are looked up through
+  Restart Manager no more than 200 times per item so as not to slow the cleanup down.
+* Symbolic links and junctions are never followed, so they cannot lead to other files.
+  Drive roots, the user profile, Windows, Program Files and similar folders are protected from
+  cleanup even if the catalog contains a mistake.
 
-## Командная строка
+## Command line
 
 ```bash
 HexCleanerCli analyze --preset recommended --details
@@ -68,130 +72,172 @@ HexCleanerCli analyze --preset recommended --details
 HexCleanerCli clean --preset safe --tasks recycle_bin --quiet
 ```
 
-| Команда | Что делает |
+| Command | What it does |
 |---|---|
-| `analyze [что] [параметры]` | Анализ: сколько мусора найдено. Ничего не удаляет |
-| `clean [что] [параметры]` | Очистка |
-| `list` | Пункты (идентификаторы, уровень безопасности, отмечены ли в программе) и наборы |
-| `help` | Справка с примерами |
+| `analyze [what] [options]` | Analysis: how much junk is found. Deletes nothing |
+| `clean [what] [options]` | Cleanup |
+| `list` | Items (ids, safety level, whether checked in the program) and presets |
+| `help` | Help with examples |
 
-Что обработать — всё указанное складывается:
+What to process — everything listed is combined:
 
-* `--preset <имя>` — `safe`, `recommended`, `full` или название своего набора;
-* `--tasks <id,id,...>` — отдельные пункты (идентификаторы из `list`);
-* `--exclude <id,id,...>` — убрать пункты из выбранного;
-* `--selected` — пункты, отмеченные в окне программы. Если ничего не указано, берутся они же.
+* `--preset <name>` — `safe`, `recommended`, `full` or the name of your own preset;
+* `--tasks <id,id,...>` — individual items (ids from `list`);
+* `--exclude <id,id,...>` — remove items from the selection;
+* `--selected` — items checked in the program window. If nothing is specified, these are used.
 
-Параметры: `--details` (папки с мусором), `--quiet` (только итог), `--lang <код>`,
-`--compress-logs` / `--no-compress-logs`, `--close-apps` (перед очисткой закрыть мешающие
-браузеры и лаунчеры; при анализе — только показать их), `--restart-apps` (после очистки
-запустить закрытые программы снова).
+Options: `--details` (folders with junk), `--quiet` (totals only), `--lang <code>`,
+`--compress-logs` / `--no-compress-logs`, `--close-apps` (close browsers and launchers that are
+in the way before cleaning; with analyze, only list them), `--restart-apps` (start the closed
+programs again after the cleanup).
 
-Пункты, которым нужны права администратора, без этих прав пропускаются — для них
-командную строку (или задание планировщика) нужно запускать от имени администратора.
-Ctrl+C останавливает работу аккуратно: службы запускаются обратно, журнал дописывается.
+Items that need administrator rights are skipped without them — run the command prompt
+(or the scheduled task) as administrator to process them.
+Ctrl+C stops gracefully: services are started again and the log is completed.
 
-Коды возврата (их показывает планировщик Windows):
+Exit codes (shown by Windows Task Scheduler):
 
-| Код | Значение |
+| Code | Meaning |
 |---|---|
-| 0 | Готово без ошибок |
-| 1 | Ошибка в параметрах |
-| 2 | Готово, но часть файлов не удалось удалить или часть пунктов пропущена |
-| 3 | Не удалось начать (например, создать журнал) |
-| 4 | Остановлено по Ctrl+C |
+| 0 | Done without errors |
+| 1 | Invalid arguments |
+| 2 | Done, but some files could not be deleted or some items were skipped |
+| 3 | Could not start (e.g. could not create the log) |
+| 4 | Stopped with Ctrl+C |
 
-## Плановая очистка
+## Scheduled cleanup
 
-Вкладка «Плановая очистка» создаёт задания в Планировщике заданий Windows (папка
-`\HexCleaner\`): что очищать (набор или отмеченные пункты), когда (ежедневно, по дням
-недели или в число месяца) и в какое время, закрывать ли мешающие программы и запускать ли
-с правами администратора (это можно выбрать, только если HexCleaner запущен от имени
-администратора). Задания можно включать и выключать, менять, удалять и запускать сразу.
+The "Scheduled cleanup" tab creates tasks in Windows Task Scheduler (the `\HexCleaner\` folder):
+what to clean (a preset or the checked items), when (daily, on chosen weekdays or on a day of the
+month) and at what time, whether to close programs that are in the way, and whether to run with
+administrator rights (this can be chosen only if HexCleaner itself runs as administrator).
+Tasks can be enabled and disabled, edited, deleted and run right away.
 
-Задание запускает `HexCleaner.exe --scheduled clean --tasks … --quiet` — ту же команду, что
-и `HexCleanerCli.exe`, но без окна и без мелькающей консоли; журнал пишется как обычно.
-Так же можно запускать любые команды командной строки, даже если `HexCleanerCli.exe` нет:
-`HexCleaner --scheduled help`. Другие параметры `HexCleaner.exe` не принимает: на них, как и
-на `--help`, он показывает справку — в консоли, если запущен из неё, иначе в окне сообщения.
-Программа регулярно сверяет свой список с Планировщиком: если задание удалили в
-«Планировщике заданий», оно помечается в списке, и его можно создать снова или убрать.
-Задания HexCleaner в Планировщике, которых нет в списке, показываются отдельно.
+A task runs `HexCleaner.exe --scheduled clean --tasks … --quiet` — the same command as
+`HexCleanerCli.exe`, but without a window and without a flashing console; the log is written as usual.
+Any command-line command can be run this way, even if `HexCleanerCli.exe` is missing:
+`HexCleaner --scheduled help`. `HexCleaner.exe` accepts no other arguments: for them, as for
+`--help`, it shows help — in the console if started from one, otherwise in a message box.
+The program regularly compares its list with Task Scheduler: if a task was deleted in
+Task Scheduler, it is marked in the list and can be recreated or removed.
+HexCleaner tasks in Task Scheduler that are not in the list are shown separately.
 
-## Языки
+## Settings and updates
 
-Все тексты программы (интерфейс, журналы, причины ошибок) лежат в файлах перевода,
-в коде их нет — только ключи вида `t!("footer.analyze")`. Встроенные языки — русский,
-украинский и английский (`languages/ru.json`, `languages/uk.json`, `languages/en.json`) —
-вшиты в программу. При первом запуске язык берётся из настроек Windows.
+The "Settings" tab: language and theme (dark, light or as in Windows); a notification when
+analysis or cleanup finishes and flashing of the taskbar button (each can be turned off);
+compression of previous logs; updates; links to the GitHub releases and to Patreon.
 
-При запуске программа выкладывает их в папку `%APPDATA%\HexCleaner\languages`
-(кнопка «Папка языков…» в списке языков). Чтобы добавить свой язык:
+At startup the window asks GitHub for the latest release
+(`api.github.com/repos/ModdingTechNik/HexCleaner/releases/latest`; drafts and pre-releases
+are not included). If its tag is newer than the program version, a dialog appears:
+"Update", "Remind me in a day / 3 days / a week", "Skip this version" (the program will remind
+you about the next one) or "Don't check for updates" (can be turned back on in the settings).
+The "Check now" button is there too: a manual check offers even a skipped version.
+At startup GitHub is asked at most once every 5 minutes (the time of the last check is stored in
+the settings, `updates.last_check`); the "Check now" button always works.
 
-1. Скопируйте `en.json`, например, в `de.json` — имя файла станет кодом языка.
-2. Поменяйте `name` (так язык называется в списке) и переведите тексты в `strings`.
-   Подстановки в фигурных скобках (`{files}`, `{size}` …) оставьте как есть.
-3. Откройте список языков — новый язык появится в нём.
+Versions are compared by SemVer rules with any number of parts: `0.10.0` is newer than `0.9.1`,
+`0.1` and `0.1.0.0` are the same version, `0.2.0-beta.1` is older than `0.2.0`. The program
+tells you if the installed version is newer than the latest release (e.g. built before it was
+published), if there are no published releases (only drafts or pre-releases), and if the tag of
+the latest release is not a version number.
 
-Непереведённые ключи берутся из английского, так что перевод можно делать постепенно.
-Файл `ru.json` или `en.json` в этой папке дополняет встроенный язык: в нём достаточно
-оставить только те тексты, которые хочется поменять. Удалённый файл встроенного языка
-будет создан заново при следующем запуске.
+Updating: the release zip archive is downloaded, verified against the SHA-256 checksum
+computed by GitHub and unpacked next to the program. The running exe is renamed to
+`*.update-old` (deleted at the next start), the new one takes its place, and the program restarts.
+The path does not change, so scheduled tasks keep working. If the program folder is not writable
+(e.g. `Program Files`), HexCleaner asks to be run as administrator. Networking goes through
+WinHTTP, built into Windows (system proxy and certificates), without third-party libraries.
 
-Тесты проверяют, что у всех ключей из кода есть перевод, что в словарях нет лишних ключей
-и что в коде не осталось непереведённых русских строк.
+How to publish an update:
 
-## Иконка
+1. Bump `version` in `Cargo.toml` (e.g. `0.2.0`) and build with `cargo build --release`.
+2. Pack `HexCleaner.exe` and `HexCleanerCli.exe` into a zip (any name, e.g. `release.zip`).
+3. Create a GitHub release with a tag equal to the version (`0.2.0` or `v0.2.0`) and attach the
+   archive. The program shows the release description in the dialog as "What's new". A release
+   marked "Set as a pre-release" is not offered — that's how you can publish a test build.
 
-Исходники — `assets/icon.svg` (для 32 px и больше) и `assets/icon-small.svg`
-(упрощённая, для 16–24 px: в мелком размере детали сливаются). После правки SVG:
+## Languages
+
+All program texts (interface, logs, error reasons) live in translation files; the code contains
+only keys like `t!("footer.analyze")`. The built-in languages — Russian, Ukrainian and English
+(`languages/ru.json`, `languages/uk.json`, `languages/en.json`) — are embedded in the program.
+On first launch the language is taken from Windows settings.
+
+At startup the program puts them into `%APPDATA%\HexCleaner\languages`
+(the "Languages folder…" button on the "Settings" tab). To add your own language:
+
+1. Copy `en.json`, for example, to `de.json` — the file name becomes the language code.
+2. Change `name` (how the language is called in the list) and translate the texts in `strings`.
+   Leave the placeholders in curly braces (`{files}`, `{size}` …) as they are.
+3. Open the language list — the new language appears there.
+
+Untranslated keys fall back to English, so a translation can be done gradually.
+A `ru.json` or `en.json` file in this folder extends the built-in language: it only needs the
+texts you want to change. A deleted built-in language file is recreated at the next start.
+
+Tests check that every key used in the code has a translation, that the dictionaries contain no
+unused keys, and that no untranslated Russian strings are left in the code.
+
+## Icon
+
+The sources are `assets/icon.svg` (for 32 px and larger) and `assets/icon-small.svg`
+(simplified, for 16–24 px: at small sizes details blur together). After editing the SVG:
 
 ```bash
 cargo run --example make_icon
 ```
 
-Команда пересобирает `assets/icon.ico` (все размеры Windows) и `assets/icon-256.png`
-(иконка окна). `build.rs` вшивает иконку и сведения о файле (`assets/*.rc`) в оба exe.
+This rebuilds `assets/icon.ico` (all Windows sizes) and `assets/icon-256.png`
+(the window icon). `build.rs` embeds the icon and file information (`assets/*.rc`) into both exe files.
 
-## Устройство проекта
+## Project structure
 
-| Файл | Назначение |
+| File | Purpose |
 |---|---|
-| `src/lib.rs` | Ядро — библиотека, общая для окна и командной строки |
-| `src/catalog.rs` | Список пунктов очистки и путей. **Новые пункты добавляются здесь.** |
-| `src/presets.rs` | Наборы галочек: встроенные по уровню безопасности и сохранённые пользователем |
-| `src/i18n.rs`, `languages/` | Локализация: загрузка переводов, макрос `t!`, встроенные словари |
-| `src/cleaner/` | Движок очистки: поток, события для интерфейса, удаление файлов, журнал, статистика |
-| `src/system/` | Обёртки над Windows API (права, службы, журналы событий, память, Restart Manager). Весь `unsafe` собран здесь |
-| `src/settings.rs` | Сохранение выбранных пунктов, своих наборов, языка и темы |
-| `src/cli/` | Командная строка: разбор параметров, выбор пунктов, вывод, коды возврата |
-| `src/schedule.rs` | Плановое задание и его XML для Планировщика |
-| `src/main.rs`, `src/app.rs`, `src/widgets.rs` | Окно (`HexCleaner.exe`) |
-| `src/schedule_tab.rs`, `src/progress.rs` | Вкладка плановой очистки, прогресс очистки после анализа |
-| `src/bin/cli.rs` | Командная строка (`HexCleanerCli.exe`) |
-| `tests/cli.rs` | Проверка `HexCleanerCli.exe` как готовой программы |
-| `assets/`, `build.rs`, `examples/make_icon.rs` | Иконка, сведения о файле и их сборка |
+| `src/lib.rs` | The core — a library shared by the window and the command line |
+| `src/catalog.rs` | The list of cleanup items and paths. **New items are added here.** |
+| `src/presets.rs` | Presets: built-in by safety level and saved by the user |
+| `src/i18n.rs`, `languages/` | Localization: loading translations, the `t!` macro, built-in dictionaries |
+| `src/cleaner/` | The cleanup engine: thread, events for the interface, file deletion, log, statistics |
+| `src/system/` | Windows API wrappers (rights, services, event logs, memory, Restart Manager, HTTPS, SHA-256). All `unsafe` code lives here |
+| `src/settings.rs` | Saving the selected items, presets and settings |
+| `src/update.rs` | Updating from GitHub releases: version check, download, installation |
+| `src/cli/` | Command line: argument parsing, item selection, output, exit codes |
+| `src/schedule.rs` | A scheduled task and its XML for Task Scheduler |
+| `src/main.rs`, `src/app.rs`, `src/widgets.rs` | The window (`HexCleaner.exe`) |
+| `src/schedule_tab.rs`, `src/progress.rs` | The scheduled cleanup tab, cleanup progress after analysis |
+| `src/settings_tab.rs`, `src/update_ui.rs` | The "Settings" tab, the update dialog |
+| `src/bin/cli.rs` | The command line (`HexCleanerCli.exe`) |
+| `tests/cli.rs`, `tests/gui.rs` | Tests of `HexCleanerCli.exe` and of `HexCleaner.exe` arguments as finished programs |
+| `assets/`, `build.rs`, `examples/make_icon.rs` | The icon, file information and their build |
 
-### Добавление пункта
+### Adding an item
 
-В `all_tasks()` в `src/catalog.rs` добавьте ещё один `CleanupTask`:
+Add another `CleanupTask` to `all_tasks()` in `src/catalog.rs`:
 
 ```rust
 CleanupTask {
-    id: "my_app_cache",                       // по нему запоминается галочка
-    safety: Safety::Safe,                     // уровень безопасности: Safe, Moderate или Caution
-    programs_to_close: &[],                   // программы, которые можно предложить закрыть
+    id: "my_app_cache",                       // the checkbox is remembered by this id
+    safety: Safety::Safe,                     // safety level: Safe, Moderate or Caution
+    programs_to_close: &[],                   // programs that may be offered to close
     requires_admin: false,
     services_to_stop: &[],
     actions: vec![
-        clear_dir(r"%LOCALAPPDATA%\MyApp\Cache"),          // очистить содержимое папки
-        delete_files(r"%LOCALAPPDATA%\MyApp\*.log"),       // удалить файлы по маске
+        clear_dir(r"%LOCALAPPDATA%\MyApp\Cache"),          // clear the folder contents
+        delete_files(r"%LOCALAPPDATA%\MyApp\*.log"),       // delete files by mask
     ],
 },
 ```
 
-Заголовок и описание пункта добавьте в `languages/ru.json` и `languages/en.json`
-с ключами `task.my_app_cache.title` и `task.my_app_cache.description`.
+Add the item's title and description to `languages/en.json`, `languages/ru.json` and
+`languages/uk.json` with the keys `task.my_app_cache.title` and `task.my_app_cache.description`.
 
-В путях можно использовать переменные окружения (`%LOCALAPPDATA%`, `%WINDIR%` …),
-специальную переменную `%STEAM%` (папка Steam из реестра) и маску `*`.
+Paths may use environment variables (`%LOCALAPPDATA%`, `%WINDIR%` …),
+the special `%STEAM%` variable (the Steam folder from the registry) and the `*` mask.
+
+## Support
+
+If HexCleaner is useful to you, you can support its development on
+[Patreon](https://patreon.com/ModdingTechNik).
