@@ -79,6 +79,14 @@ counted twice.
 In the analysis results on the "Cleanup" tab, clicking a folder offers to open it in
 "Disk space" or in Explorer.
 
+
+The "Settings" tab can add an "Analyze folder in HexCleaner" item to the Explorer context menu of
+folders, folder backgrounds and drives — always or only with Shift + right-click. It is written to
+`HKCU\Software\Classes` (no administrator rights needed) and runs
+`HexCleaner.exe --disk-space "<folder>"`, which opens the window on the "Disk space" tab.
+In Windows 11 the item is under "Show more options". If the program is moved, the item is
+repointed to it at the next start.
+
 ## Command line
 
 ```bash
@@ -133,7 +141,8 @@ Tasks can be enabled and disabled, edited, deleted and run right away.
 A task runs `HexCleaner.exe --scheduled clean --tasks … --quiet` — the same command as
 `HexCleanerCli.exe`, but without a window and without a flashing console; the log is written as usual.
 Any command-line command can be run this way, even if `HexCleanerCli.exe` is missing:
-`HexCleaner --scheduled help`. `HexCleaner.exe` accepts no other arguments: for them, as for
+`HexCleaner --scheduled help`. Besides that, `HexCleaner.exe` accepts only `--disk-space <folder>`
+(see "Disk space"): for other arguments, as for
 `--help`, it shows help — in the console if started from one, otherwise in a message box.
 The program regularly compares its list with Task Scheduler: if a task was deleted in
 Task Scheduler, it is marked in the list and can be recreated or removed.

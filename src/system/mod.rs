@@ -5,6 +5,7 @@ pub mod console;
 pub mod delete;
 pub mod drives;
 pub mod event_log;
+pub mod explorer_menu;
 pub mod hash;
 pub mod http;
 pub mod locale;

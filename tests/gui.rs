@@ -12,12 +12,25 @@ fn text(output: &Output) -> String {
 }
 
 #[test]
-fn help_describes_scheduled_mode() {
+fn help_describes_all_arguments() {
     for flag in ["--help", "-h", "/?"] {
         let output = gui(&[flag]);
         assert_eq!(output.status.code(), Some(0), "{flag}");
-        assert!(text(&output).contains("--scheduled"), "в справке нет --scheduled:\n{}", text(&output));
+        for expected in ["--scheduled", "--disk-space"] {
+            assert!(text(&output).contains(expected), "в справке нет {expected}:\n{}", text(&output));
+        }
     }
+}
+
+/// С папкой `--disk-space` открывает окно, поэтому здесь проверяем только ошибки.
+#[test]
+fn disk_space_needs_a_path() {
+    let output = gui(&["--disk-space"]);
+    assert_eq!(output.status.code(), Some(1));
+    assert!(text(&output).contains("--disk-space"), "{}", text(&output));
+
+    // Лишний параметр после папки — тоже ошибка, а не окно.
+    assert_eq!(gui(&["--disk-space", r"C:\", "extra"]).status.code(), Some(1));
 }
 
 #[test]

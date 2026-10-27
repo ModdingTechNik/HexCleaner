@@ -15,18 +15,22 @@ use eframe::egui;
 
 use hexcleaner::cli::{self, ExitCode};
 use hexcleaner::settings::Settings;
+use hexcleaner::system::explorer_menu;
 use hexcleaner::{i18n, schedule, system, t};
 
 /// Имя программы в справке.
 const EXE_NAME: &str = "HexCleaner";
 
 fn main() -> eframe::Result {
-    // С параметрами окно не открывается: выполняем команду или показываем справку.
+    // Окно открывается без параметров или с папкой для вкладки «Место на диске»
+    // (так его запускает пункт контекстного меню проводника). С остальными параметрами
+    // выполняем команду или показываем справку.
     let args: Vec<String> = std::env::args().skip(1).collect();
-    if !args.is_empty() {
-        let exit_code = run_with_arguments(&args);
-        std::process::exit(exit_code as i32);
-    }
+    let open_folder = match args.as_slice() {
+        [] => None,
+        [flag, path] if flag == explorer_menu::OPEN_FLAG => Some(explorer_menu::path_from_argument(path)),
+        _ => std::process::exit(run_with_arguments(&args) as i32),
+    };
 
     let is_admin = system::admin::is_elevated();
     let settings = Settings::load();
@@ -48,11 +52,11 @@ fn main() -> eframe::Result {
     eframe::run_native(
         "HexCleaner",
         options,
-        Box::new(move |cc| Ok(Box::new(app::HexCleanerApp::new(cc, settings, is_admin, language_error)))),
+        Box::new(move |cc| Ok(Box::new(app::HexCleanerApp::new(cc, settings, is_admin, language_error, open_folder)))),
     )
 }
 
-/// Запуск с параметрами. Понимает только `--scheduled <команда>` и справку;
+/// Запуск с параметрами без окна. Понимает `--scheduled <команда>` и справку;
 /// на остальное отвечает ошибкой со справкой, а не открывает окно.
 fn run_with_arguments(args: &[String]) -> ExitCode {
     let has_console = system::console::attach_parent_console();
@@ -66,13 +70,18 @@ fn run_with_arguments(args: &[String]) -> ExitCode {
     if let Some(error) = i18n::select_language(Settings::load().language.as_deref()) {
         eprintln!("{error}");
     }
-    let help = t!("gui.help", exe = EXE_NAME, scheduled = schedule::SCHEDULED_FLAG);
+    let help = t!("gui.help", exe = EXE_NAME, scheduled = schedule::SCHEDULED_FLAG, disk = explorer_menu::OPEN_FLAG);
     let is_help = |arg: &String| matches!(arg.as_str(), "-h" | "--help" | "/?");
     let (text, exit_code) = match args {
         [arg] if is_help(arg) => (help, ExitCode::Success),
+        [flag] if flag == explorer_menu::OPEN_FLAG => {
+            (format!("{}\n\n{help}", t!("gui.error.missing_path", option = flag)), ExitCode::BadArguments)
+        }
         _ => {
             let unknown = args.iter().find(|arg| !is_help(arg)).unwrap_or(&args[0]);
-            (format!("{}\n\n{help}", t!("gui.error.unknown_argument", value = unknown)), ExitCode::BadArguments)
+            (format!("{}
+
+{help}", t!("gui.error.unknown_argument", value = unknown)), ExitCode::BadArguments)
         }
     };
 

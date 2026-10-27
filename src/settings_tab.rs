@@ -1,8 +1,11 @@
-//! Вкладка «Настройки»: язык и тема, уведомления, журналы, обновления.
+//! Вкладка «Настройки»: язык и тема, уведомления, журналы, пункт в меню проводника, обновления.
 
-use eframe::egui::{self, ComboBox, Grid, RichText, ScrollArea, Ui};
+use std::path::{Path, PathBuf};
+
+use eframe::egui::{self, Checkbox, ComboBox, Grid, RichText, ScrollArea, Ui};
 use hexcleaner::i18n::{self, LanguageInfo};
 use hexcleaner::settings::{Settings, Theme};
+use hexcleaner::system::explorer_menu::{self, MenuState};
 use hexcleaner::{t, update};
 
 use crate::app::{open_in_explorer, window_title};
@@ -16,12 +19,27 @@ pub struct SettingsTab {
     languages: Vec<LanguageInfo>,
     /// Ошибка при смене языка или чтении файлов переводов.
     error: Option<String>,
+    /// Путь к запущенной программе — её запускает пункт меню проводника.
+    exe: Option<PathBuf>,
+    /// Пункт в меню проводника по последнему чтению реестра.
+    menu: MenuState,
+    menu_error: Option<String>,
 }
 
 impl SettingsTab {
     pub fn new() -> Self {
-        let mut tab = Self { languages: Vec::new(), error: None };
+        let mut tab = Self {
+            languages: Vec::new(),
+            error: None,
+            exe: std::env::current_exe().ok(),
+            menu: explorer_menu::state(),
+            menu_error: None,
+        };
         tab.refresh_languages();
+        // Программу перенесли в другую папку — пункт меню ведёт в пустоту, переписываем его на эту копию.
+        if tab.menu.installed && tab.menu.exe.as_deref().is_none_or(|exe| !exe.exists()) {
+            tab.update_menu(true, tab.menu.shift_only, tab.exe.clone());
+        }
         tab
     }
 
@@ -58,6 +76,9 @@ impl SettingsTab {
                 settings.save();
             }
 
+            section(ui, t!("settings.explorer"));
+            self.explorer_section(ui);
+
             section(ui, t!("settings.updates"));
             updater.settings_section(ui, settings);
             ui.horizontal(|ui| {
@@ -66,6 +87,56 @@ impl SettingsTab {
                 ui.hyperlink_to(t!("settings.patreon"), PATREON_PAGE);
             });
         });
+    }
+
+    /// Пункт «Анализ папки в HexCleaner» в контекстном меню проводника.
+    fn explorer_section(&mut self, ui: &mut Ui) {
+        let mut installed = self.menu.installed;
+        let mut shift_only = self.menu.shift_only;
+        let menu = ui.checkbox(&mut installed, t!("settings.explorer_menu", label = t!("explorer_menu.label")));
+        let menu_changed = menu.on_hover_text(t!("settings.explorer_menu.hint")).changed();
+        let shift_changed = ui
+            .indent("explorer_shift", |ui| {
+                ui.add_enabled(installed, Checkbox::new(&mut shift_only, t!("settings.explorer_shift")))
+                    .on_hover_text(t!("settings.explorer_shift.hint"))
+            })
+            .inner
+            .changed();
+        ui.label(RichText::new(t!("settings.explorer_menu.windows11")).weak());
+
+        // Пункт запускает другую копию программы — например, старую или собранную из исходников.
+        let mut rebind = false;
+        if self.menu.installed
+            && let (Some(registered), Some(exe)) = (&self.menu.exe, &self.exe)
+            && !same_path(registered, exe)
+        {
+            ui.horizontal_wrapped(|ui| {
+                ui.label(RichText::new(t!("settings.explorer_other_copy", path = registered.display())).weak());
+                rebind = ui.small_button(t!("settings.explorer_use_this_copy")).clicked();
+            });
+        }
+
+        if menu_changed || shift_changed {
+            // Включаем и меняем режим для той копии, на которую пункт уже указывает.
+            let exe = self.menu.exe.clone().filter(|exe| exe.exists()).or_else(|| self.exe.clone());
+            self.update_menu(installed, shift_only, exe);
+        } else if rebind {
+            self.update_menu(true, shift_only, self.exe.clone());
+        }
+        if let Some(error) = &self.menu_error {
+            ui.label(RichText::new(error).color(ui.visuals().error_fg_color));
+        }
+    }
+
+    /// Добавляет, меняет или убирает пункт меню и перечитывает его из реестра.
+    fn update_menu(&mut self, installed: bool, shift_only: bool, exe: Option<PathBuf>) {
+        let result = match (installed, exe) {
+            (true, Some(exe)) => explorer_menu::install(&exe, &t!("explorer_menu.label"), shift_only),
+            (true, None) => Err(std::io::Error::other(t!("settings.explorer_no_exe"))),
+            (false, _) => explorer_menu::uninstall(),
+        };
+        self.menu_error = result.err().map(|error| t!("settings.explorer_error", error = error));
+        self.menu = explorer_menu::state();
     }
 
     /// Перечитывает список языков, чтобы в нём появились новые файлы из папки языков.
@@ -112,6 +183,11 @@ impl SettingsTab {
                 settings.language = Some(code);
                 settings.save();
                 ui.ctx().send_viewport_cmd(egui::ViewportCommand::Title(window_title(is_admin)));
+                // Текст пункта в меню проводника — на новом языке.
+                if self.menu.installed {
+                    let exe = self.menu.exe.clone().or_else(|| self.exe.clone());
+                    self.update_menu(true, self.menu.shift_only, exe);
+                }
             }
             Err(error) => self.error = Some(t!("status.language_failed", code = code, error = error)),
         }
@@ -136,6 +212,11 @@ fn theme_selector(ui: &mut Ui, settings: &mut Settings) {
         settings.save();
         ui.ctx().set_theme(egui_theme(theme));
     }
+}
+
+/// Пути Windows сравниваются без учёта регистра.
+fn same_path(a: &Path, b: &Path) -> bool {
+    a.as_os_str().eq_ignore_ascii_case(b.as_os_str())
 }
 
 /// Заголовок раздела с отступом сверху.

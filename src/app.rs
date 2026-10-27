@@ -169,12 +169,14 @@ enum ProgramsDecision {
 }
 
 impl HexCleanerApp {
-    /// `language_error` — что пошло не так при включении сохранённого языка (показывается внизу окна).
+    /// `language_error` — что пошло не так при включении сохранённого языка (показывается внизу окна),
+    /// `open_folder` — папка, которую сразу открыть во вкладке «Место на диске».
     pub fn new(
         cc: &eframe::CreationContext,
         settings: Settings,
         is_admin: bool,
         language_error: Option<String>,
+        open_folder: Option<PathBuf>,
     ) -> Self {
         cc.egui_ctx.set_theme(egui_theme(settings.theme));
         use_system_font(&cc.egui_ctx);
@@ -206,6 +208,11 @@ impl HexCleanerApp {
         app.updater.check_on_start(&app.settings);
         if let Some(error) = language_error {
             app.status = Status::Error(error);
+        }
+        // Запуск из контекстного меню проводника: сразу открываем папку.
+        if let Some(path) = open_folder {
+            app.disk_tab.open(path);
+            app.tab = Tab::Disk;
         }
         app
     }
