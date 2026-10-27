@@ -10,7 +10,7 @@ use std::time::Duration;
 use eframe::egui::collapsing_header::CollapsingState;
 use eframe::egui::{
     self, Align, Button, CentralPanel, Checkbox, Color32, ComboBox, Grid, Id, Key, Label, Layout, Modal, Panel,
-    ProgressBar, RichText, ScrollArea, TextEdit, TextStyle, TextWrapMode, Ui, WidgetText, vec2,
+    Popup, ProgressBar, RichText, ScrollArea, TextEdit, TextStyle, TextWrapMode, Ui, WidgetText, vec2,
 };
 
 use hexcleaner::catalog::{self, CleanupTask, Safety};
@@ -25,6 +25,7 @@ use hexcleaner::system::notification::{self, Notification};
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 use hexcleaner::t;
 
+use crate::disk_tab::DiskTab;
 use crate::progress::{CleanupProgress, TaskProgress, cleanup_progress};
 use crate::schedule_tab::ScheduleTab;
 use crate::settings_tab::{SettingsTab, egui_theme};
@@ -99,6 +100,7 @@ enum TaskState {
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Tab {
     Cleanup,
+    Disk,
     Schedule,
     Settings,
 }
@@ -144,6 +146,7 @@ pub struct HexCleanerApp {
     /// Итоги анализа для пунктов текущей очистки; у остальных пунктов — `None`.
     expected: Vec<Option<TaskReport>>,
     tab: Tab,
+    disk_tab: DiskTab,
     schedule_tab: ScheduleTab,
     settings_tab: SettingsTab,
     updater: Updater,
@@ -195,6 +198,7 @@ impl HexCleanerApp {
             analysis: vec![None; task_count],
             expected: vec![None; task_count],
             tab: Tab::Cleanup,
+            disk_tab: DiskTab::default(),
             schedule_tab: ScheduleTab::default(),
             settings_tab: SettingsTab::new(),
             updater: Updater::new(),
@@ -672,13 +676,18 @@ impl HexCleanerApp {
         }
 
         let id = ui.make_persistent_id(("task_locations", task.id));
+        let mut open_in_disk_tab = None;
         CollapsingState::load_with_default_open(ui.ctx(), id, false)
             .show_header(ui, |ui| self.task_row(ui, index, task))
             .body(|ui| {
                 if let TaskState::Done(result) = &self.task_states[index] {
-                    locations_grid(ui, task.id, &result.locations);
+                    open_in_disk_tab = locations_grid(ui, task.id, &result.locations);
                 }
             });
+        if let Some(path) = open_in_disk_tab {
+            self.disk_tab.open(path);
+            self.tab = Tab::Disk;
+        }
     }
 
     fn task_row(&mut self, ui: &mut Ui, index: usize, task: &CleanupTask) {
@@ -887,6 +896,7 @@ impl eframe::App for HexCleanerApp {
             ui.add_space(6.0);
             ui.horizontal(|ui| {
                 ui.selectable_value(&mut self.tab, Tab::Cleanup, t!("tabs.cleanup"));
+                ui.selectable_value(&mut self.tab, Tab::Disk, t!("tabs.disk"));
                 ui.selectable_value(&mut self.tab, Tab::Schedule, t!("tabs.schedule"));
                 ui.selectable_value(&mut self.tab, Tab::Settings, t!("tabs.settings"));
             });
@@ -902,6 +912,10 @@ impl eframe::App for HexCleanerApp {
                 CentralPanel::default().show(ui, |ui| {
                     self.schedule_tab.ui(ui, &mut self.settings, &self.tasks, self.is_admin);
                 });
+            }
+            Tab::Disk => {
+                let window = self.window;
+                CentralPanel::default().show(ui, |ui| self.disk_tab.ui(ui, window));
             }
             Tab::Settings => {
                 let busy = self.is_running();
@@ -929,15 +943,24 @@ fn side_button(ui: &Ui, text: String) -> Button<'static> {
 }
 
 /// Таблица «объём — число файлов — папка» для раскрытого пункта.
-fn locations_grid(ui: &mut Ui, task_id: &str, locations: &[Location]) {
+/// Возвращает папку, которую выбрали открыть во вкладке «Место на диске».
+fn locations_grid(ui: &mut Ui, task_id: &str, locations: &[Location]) -> Option<PathBuf> {
+    let mut open_in_disk_tab = None;
     Grid::new(("locations", task_id)).num_columns(3).spacing([16.0, 2.0]).show(ui, |ui| {
         for location in locations.iter().take(MAX_SHOWN_LOCATIONS) {
             ui.label(RichText::new(format_size(location.bytes)).strong());
             ui.label(t!("locations.files", count = location.files));
             let hint = t!("locations.open_hint", path = location.path.display());
-            if ui.link(short_path(&location.path)).on_hover_text(hint).clicked() {
-                open_in_explorer(&location.path);
-            }
+            // По щелчку — меню: открыть во вкладке «Место на диске» или в проводнике.
+            let link = ui.link(short_path(&location.path)).on_hover_text(hint);
+            Popup::menu(&link).show(|ui| {
+                if ui.button(t!("locations.open_in_disk_tab")).clicked() {
+                    open_in_disk_tab = Some(location.path.clone());
+                }
+                if ui.button(t!("locations.open_in_explorer")).clicked() {
+                    open_in_explorer(&location.path);
+                }
+            });
             ui.end_row();
         }
     });
@@ -946,6 +969,7 @@ fn locations_grid(ui: &mut Ui, task_id: &str, locations: &[Location]) {
     if hidden > 0 {
         ui.label(RichText::new(t!("locations.more", count = hidden)).weak());
     }
+    open_in_disk_tab
 }
 
 /// Сокращает путь, заменяя известные папки переменными: `%LOCALAPPDATA%\Google\Chrome\...`.

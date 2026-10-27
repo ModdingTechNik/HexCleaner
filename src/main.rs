@@ -4,6 +4,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod app;
+mod disk_tab;
 mod progress;
 mod schedule_tab;
 mod settings_tab;

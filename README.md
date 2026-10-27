@@ -62,6 +62,23 @@ Both run on the same core and share the same settings.
   Drive roots, the user profile, Windows, Program Files and similar folders are protected from
   cleanup even if the catalog contains a mistake.
 
+## Disk space
+
+The "Disk space" tab shows what takes up space on a drive or in a folder. Choose a drive
+(the list shows free space), pick a folder in the standard Windows dialog, or type a path.
+The folder is scanned in the background (several threads; it can be stopped), then its contents
+are listed from the largest to the smallest: folders with the size of everything inside and their
+file count, and files. Clicking a folder opens it; "Up" and the clickable path go back, and going
+above the scanned folder scans its parent. Right-click a row to show it in Explorer or copy its path.
+
+Next to the list there is a donut chart of the open folder. Items smaller than 3 % are merged
+into one "Other" sector; clicking it expands it into its own chart ("← Back" returns), clicking
+a folder sector opens the folder. Symbolic links and junctions are not followed, so nothing is
+counted twice.
+
+In the analysis results on the "Cleanup" tab, clicking a folder offers to open it in
+"Disk space" or in Explorer.
+
 ## Command line
 
 ```bash
@@ -203,11 +220,13 @@ This rebuilds `assets/icon.ico` (all Windows sizes) and `assets/icon-256.png`
 | `src/cleaner/` | The cleanup engine: thread, events for the interface, file deletion, log, statistics |
 | `src/system/` | Windows API wrappers (rights, services, event logs, memory, Restart Manager, HTTPS, SHA-256). All `unsafe` code lives here |
 | `src/settings.rs` | Saving the selected items, presets and settings |
+| `src/disk_usage.rs` | Disk space: scanning a folder into a tree of folders with sizes |
 | `src/update.rs` | Updating from GitHub releases: version check, download, installation |
 | `src/cli/` | Command line: argument parsing, item selection, output, exit codes |
 | `src/schedule.rs` | A scheduled task and its XML for Task Scheduler |
 | `src/main.rs`, `src/app.rs`, `src/widgets.rs` | The window (`HexCleaner.exe`) |
 | `src/schedule_tab.rs`, `src/progress.rs` | The scheduled cleanup tab, cleanup progress after analysis |
+| `src/disk_tab.rs` | The "Disk space" tab: list and chart |
 | `src/settings_tab.rs`, `src/update_ui.rs` | The "Settings" tab, the update dialog |
 | `src/bin/cli.rs` | The command line (`HexCleanerCli.exe`) |
 | `tests/cli.rs`, `tests/gui.rs` | Tests of `HexCleanerCli.exe` and of `HexCleaner.exe` arguments as finished programs |

@@ -3,6 +3,7 @@
 //!
 //! * [`catalog`] — пункты очистки и их пути;
 //! * [`cleaner`] — движок: анализ и очистка в отдельном потоке, журнал, статистика;
+//! * [`disk_usage`] — место на диске: дерево папок с размерами;
 //! * [`presets`] — наборы галочек;
 //! * [`schedule`] — плановая очистка: задания для Планировщика заданий Windows;
 //! * [`settings`] — настройки, общие для окна и командной строки;
@@ -14,6 +15,7 @@
 pub mod catalog;
 pub mod cleaner;
 pub mod cli;
+pub mod disk_usage;
 pub mod i18n;
 pub mod presets;
 pub mod schedule;

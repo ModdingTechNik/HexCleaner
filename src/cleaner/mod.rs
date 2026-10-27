@@ -28,6 +28,7 @@ use crate::system::{event_log, memory, recycle_bin, services};
 use crate::t;
 
 pub use blockers::{BlockingApp, find_blocking_apps};
+pub use files::is_link;
 pub use log::logs_directory;
 use log::CleanupLog;
 pub use report::{Location, TaskReport, TaskResult, format_size};

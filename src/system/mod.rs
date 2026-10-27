@@ -3,6 +3,7 @@
 pub mod admin;
 pub mod console;
 pub mod delete;
+pub mod drives;
 pub mod event_log;
 pub mod hash;
 pub mod http;
