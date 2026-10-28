@@ -13,7 +13,19 @@ use serde::{Deserialize, Serialize};
 use crate::catalog::CleanupTask;
 use crate::presets::{Selection, UserPreset};
 use crate::schedule::Schedule;
+use crate::trash::TrashSettings;
 use crate::update::UpdateSettings;
+
+/// Как сжимать: корзину или журналы прошлых очисток.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Compression {
+    /// Сжатие файловой системы NTFS: файлы и папки остаются как есть.
+    #[default]
+    Ntfs,
+    /// Упаковка в zip-архивы.
+    Zip,
+}
 
 /// Тема оформления.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -37,8 +49,10 @@ pub struct Settings {
     /// Задания плановой очистки. Сами задания живут в Планировщике заданий Windows,
     /// здесь — их описание, по которому их можно создать заново.
     pub schedules: Vec<Schedule>,
-    /// Сжимать ли журналы прошлых очисток в zip-архивы.
+    /// Сжимать ли журналы прошлых очисток.
     pub compress_old_logs: bool,
+    /// Как: каждый журнал в свой zip-архив или сжатием NTFS всей папки журналов.
+    pub log_compression: Compression,
     /// Код языка (имя файла перевода). `None` — язык Windows.
     pub language: Option<String>,
     pub theme: Theme,
@@ -47,6 +61,7 @@ pub struct Settings {
     /// Мигать кнопкой на панели задач, если окно неактивно, когда анализ или очистка закончились.
     pub flash_taskbar: bool,
     pub updates: UpdateSettings,
+    pub trash: TrashSettings,
 }
 
 impl Default for Settings {
@@ -56,11 +71,13 @@ impl Default for Settings {
             presets: Vec::new(),
             schedules: Vec::new(),
             compress_old_logs: true,
+            log_compression: Compression::Zip,
             language: None,
             theme: Theme::default(),
             notify_when_done: true,
             flash_taskbar: true,
             updates: UpdateSettings::default(),
+            trash: TrashSettings::default(),
         }
     }
 }

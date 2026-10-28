@@ -6,6 +6,10 @@
 //!
 //! Тот же движок выполняет и предварительный анализ ([`Mode::Analyze`]): обходит те же
 //! папки по тем же правилам, но ничего не удаляет и не меняет, а только считает.
+//!
+//! Если включена корзина ([`CleanupOptions::trash`]), файлы не удаляются, а переносятся в неё
+//! (см. `crate::trash`). Когда файл не помещается в лимит, поток спрашивает интерфейс
+//! событием [`CleanupEvent::TrashLimit`] и ждёт ответа [`CleanupJob::answer_trash_limit`].
 
 mod blockers;
 mod failure;
@@ -25,11 +29,14 @@ use crate::catalog::{Action, CleanupTask};
 use crate::system::delete::DeleteError;
 use crate::system::restart_manager::{self, ClosedPrograms};
 use crate::system::{event_log, memory, recycle_bin, services};
+use crate::settings::Compression;
 use crate::t;
+use crate::trash::{LimitRequest, Stored, TrashDecision, TrashSession, TrashSettings};
 
 pub use blockers::{BlockingApp, find_blocking_apps};
 pub use files::is_link;
 pub use log::logs_directory;
+pub use paths::is_protected;
 use log::CleanupLog;
 pub use report::{Location, TaskReport, TaskResult, format_size};
 
@@ -46,7 +53,13 @@ pub enum CleanupEvent {
     TaskFinished(usize, TaskResult),
     /// Пункт пропущен, потому что у программы нет прав администратора.
     TaskSkipped(usize),
-    Finished { total: TaskReport, log_path: PathBuf, cancelled: bool },
+    /// Файл не помещается в лимит корзины: нужен ответ [`CleanupJob::answer_trash_limit`].
+    /// Пока ответа нет, очистка стоит.
+    TrashLimit(LimitRequest),
+    /// Файлы очистки упаковываются в корзине (сжатие ZIP).
+    PackingTrash,
+    /// `trash_run` — имя очистки в корзине, если в неё что-то перенесено.
+    Finished { total: TaskReport, log_path: PathBuf, cancelled: bool, trash_run: Option<String> },
     /// Очистка не смогла начаться.
     Failed(String),
 }
@@ -66,18 +79,24 @@ pub struct CleanupOptions {
     pub mode: Mode,
     /// Есть ли у программы права администратора. Без них пункты, требующие этих прав, пропускаются.
     pub is_admin: bool,
-    /// Сжать журналы прошлых очисток в zip-архивы перед созданием нового журнала.
-    pub compress_old_logs: bool,
+    /// Как сжать журналы прошлых очисток перед созданием нового; `None` — не сжимать.
+    pub log_compression: Option<Compression>,
     /// Программы (имена файлов, например `chrome.exe`), которые нужно корректно закрыть
     /// перед очисткой. Обычно это [`find_blocking_apps`]. При анализе не закрываются.
     pub close_programs: Vec<String>,
     /// Запустить закрытые программы снова после очистки.
     pub restart_programs: bool,
+    /// Настройки корзины. Её папка не очищается, даже если лежит внутри очищаемой.
+    pub trash: Option<TrashSettings>,
+    /// Спрашивать интерфейс, если файл не помещается в лимит корзины. Без этого
+    /// (командная строка) такие файлы удаляются мимо корзины.
+    pub ask_trash_limit: bool,
 }
 
 /// Запущенная очистка.
 pub struct CleanupJob {
     events: Receiver<CleanupEvent>,
+    decisions: Sender<TrashDecision>,
     cancel: Arc<AtomicBool>,
     worker: Option<JoinHandle<()>>,
 }
@@ -86,12 +105,20 @@ impl CleanupJob {
     /// Запускает очистку выбранных пунктов (`selected` — индексы в `tasks`).
     pub fn start(tasks: Arc<Vec<CleanupTask>>, selected: Vec<usize>, options: CleanupOptions) -> Self {
         let (sender, events) = mpsc::channel();
+        let (decisions, decision_receiver) = mpsc::channel();
         let cancel = Arc::new(AtomicBool::new(false));
 
         let cancel_flag = Arc::clone(&cancel);
-        let worker = thread::spawn(move || run_cleanup(&tasks, &selected, options, &sender, &cancel_flag));
+        let worker = thread::spawn(move || {
+            run_cleanup(&tasks, &selected, options, &sender, &decision_receiver, &cancel_flag);
+        });
 
-        Self { events, cancel, worker: Some(worker) }
+        Self { events, decisions, cancel, worker: Some(worker) }
+    }
+
+    /// Ответ на [`CleanupEvent::TrashLimit`].
+    pub fn answer_trash_limit(&self, decision: TrashDecision) {
+        let _ = self.decisions.send(decision);
     }
 
     /// Просит поток очистки остановиться как можно скорее.
@@ -127,10 +154,11 @@ fn run_cleanup(
     selected: &[usize],
     options: CleanupOptions,
     events: &Sender<CleanupEvent>,
+    decisions: &Receiver<TrashDecision>,
     cancel: &AtomicBool,
 ) {
     let is_admin = options.is_admin;
-    let mut log = match CleanupLog::create(options.mode, options.compress_old_logs) {
+    let mut log = match CleanupLog::create(options.mode, options.log_compression) {
         Ok(log) => log,
         Err(error) => {
             let _ = events.send(CleanupEvent::Failed(t!("engine.log_failed", error = error)));
@@ -144,6 +172,18 @@ fn run_cleanup(
         close_programs(&options.close_programs, &mut log)
     } else {
         None
+    };
+
+    // Корзина: при анализе не нужна, но её папку в любом случае не трогаем.
+    let trash_dir = options.trash.as_ref().map(TrashSettings::directory);
+    let mut trash = match (&options.trash, options.mode) {
+        (Some(settings), Mode::Clean) => TrashSession::new(settings),
+        _ => None,
+    };
+    let trash_context = TrashContext {
+        dir: trash_dir.as_deref(),
+        decisions: options.ask_trash_limit.then_some(decisions),
+        limit_reported: false,
     };
 
     let mut total = TaskReport::default();
@@ -162,8 +202,13 @@ fn run_cleanup(
 
         let _ = events.send(CleanupEvent::TaskStarted(index));
         let mut run = TaskRun::new(index, options.mode, &mut log, events, cancel);
+        run.trash = trash.as_mut();
+        run.trash_context = trash_context.clone();
         run.execute(task);
         let result = run.into_result();
+        if let Some(trash) = &trash {
+            trash.save();
+        }
 
         log.task_finished(&result);
         total += result.report;
@@ -180,9 +225,32 @@ fn run_cleanup(
         }
     }
 
+    let trash_run = trash.and_then(|trash| {
+        if options.trash.as_ref().is_some_and(|settings| settings.compress) {
+            let _ = events.send(CleanupEvent::PackingTrash);
+        }
+        let directory = trash.directory().to_owned();
+        let id = trash.finish()?;
+        log.line("");
+        log.line(&t!("log.trash_run", path = directory.join(&id).display()));
+        Some(id)
+    });
+
     let cancelled = cancel.load(Ordering::Relaxed);
     log.finish(&total, cancelled);
-    let _ = events.send(CleanupEvent::Finished { total, log_path: log.path().to_owned(), cancelled });
+    let log_path = log.path().to_owned();
+    let _ = events.send(CleanupEvent::Finished { total, log_path, cancelled, trash_run });
+}
+
+/// Что пункту нужно знать о корзине, кроме самой корзины.
+#[derive(Clone, Default)]
+struct TrashContext<'a> {
+    /// Папка корзины: её не очищаем.
+    dir: Option<&'a Path>,
+    /// Откуда приходят ответы на превышение лимита; `None` — не спрашивать.
+    decisions: Option<&'a Receiver<TrashDecision>>,
+    /// О превышении лимита без вопроса уже написано в журнале.
+    limit_reported: bool,
 }
 
 /// Корректно закрывает программы, мешающие очистке, и пишет результат в журнал.
@@ -208,6 +276,9 @@ fn close_programs(exes: &[String], log: &mut CleanupLog) -> Option<ClosedProgram
 /// Выполнение одного пункта: счётчики, журнал и флаг отмены в одном месте.
 pub struct TaskRun<'a> {
     task_index: usize,
+    /// Id и название выполняемого пункта — для корзины.
+    task_id: &'static str,
+    task_title: String,
     mode: Mode,
     report: TaskReport,
     /// Разбивка по папкам; `current_location` — папка, которая обрабатывается сейчас.
@@ -220,6 +291,9 @@ pub struct TaskRun<'a> {
     last_progress: Instant,
     /// Сколько ещё раз можно узнавать, какой процесс держит файл (см. `failure`).
     lock_queries_left: u32,
+    /// Корзина, если файлы нужно переносить в неё, а не удалять.
+    trash: Option<&'a mut TrashSession>,
+    trash_context: TrashContext<'a>,
 }
 
 impl<'a> TaskRun<'a> {
@@ -232,6 +306,8 @@ impl<'a> TaskRun<'a> {
     ) -> Self {
         Self {
             task_index,
+            task_id: "",
+            task_title: String::new(),
             mode,
             report: TaskReport::default(),
             locations: Vec::new(),
@@ -242,10 +318,14 @@ impl<'a> TaskRun<'a> {
             cancel,
             last_progress: Instant::now(),
             lock_queries_left: failure::LOCK_QUERIES_PER_TASK,
+            trash: None,
+            trash_context: TrashContext::default(),
         }
     }
 
     fn execute(&mut self, task: &CleanupTask) {
+        self.task_id = task.id;
+        self.task_title = task.title();
         // При анализе службы не трогаем: файлы только читаются.
         let stopped_services = match self.mode {
             Mode::Clean => self.stop_services(task.services_to_stop),
@@ -312,6 +392,8 @@ impl<'a> TaskRun<'a> {
             }
             if files::is_link(&metadata) {
                 self.skipped(&dir, &t!("skip.link"));
+            } else if self.is_trash_directory(&dir) {
+                self.skipped(&dir, &t!("skip.trash"));
             } else if paths::is_protected(&dir) {
                 self.skipped(&dir, &t!("skip.protected"));
             } else {
@@ -466,6 +548,45 @@ impl<'a> TaskRun<'a> {
         self.record_files(1, size);
     }
 
+    /// Папка корзины или папка внутри неё: такие не очищаются.
+    fn is_trash_directory(&self, path: &Path) -> bool {
+        self.trash_context.dir.is_some_and(|trash| {
+            let (path, trash) = (path.to_string_lossy().to_lowercase(), trash.to_string_lossy().to_lowercase());
+            path.trim_end_matches('\\') == trash.trim_end_matches('\\')
+                || path.starts_with(&format!("{}\\", trash.trim_end_matches('\\')))
+        })
+    }
+
+    /// Переносит файл в корзину, если она есть и так велит политика пункта.
+    fn move_to_trash(&mut self, path: &Path, size: u64) -> Stored {
+        let Some(trash) = self.trash.as_deref_mut() else { return Stored::NotMoved };
+        let context = &mut self.trash_context;
+        let (events, cancel, log) = (self.events, self.cancel, &mut *self.log);
+        let stored = trash.store(self.task_id, &self.task_title, path, size, &mut |request| match context.decisions {
+            Some(decisions) => ask_trash_limit(events, decisions, cancel, request),
+            None => {
+                // Командная строка: спросить некого — не поместившееся удаляется мимо корзины.
+                if !context.limit_reported {
+                    context.limit_reported = true;
+                    log.line(&t!("log.trash_limit_delete", limit = format_size(request.limit)));
+                }
+                TrashDecision::DeletePermanently
+            }
+        });
+        if matches!(stored, Stored::Stopped) {
+            self.cancel.store(true, Ordering::Relaxed);
+        }
+        stored
+    }
+
+    /// Учитывает файл, перенесённый в корзину.
+    fn record_trashed(&mut self, path: &Path, size: u64) {
+        self.log.trashed(path, size);
+        self.report.trashed_files += 1;
+        self.report.trashed_bytes += size;
+        self.record_files(1, size);
+    }
+
     /// Учитывает сразу несколько файлов общим размером `bytes`.
     fn record_files(&mut self, count: u64, bytes: u64) {
         self.report.deleted_files += count;
@@ -489,6 +610,30 @@ impl<'a> TaskRun<'a> {
 
     fn skipped(&mut self, path: &Path, reason: &str) {
         self.log.skipped(path, reason);
+    }
+}
+
+/// Спрашивает интерфейс, что делать с превышением лимита корзины, и ждёт ответа.
+/// Пока ждём, проверяем отмену: окно могут закрыть.
+fn ask_trash_limit(
+    events: &Sender<CleanupEvent>,
+    decisions: &Receiver<TrashDecision>,
+    cancel: &AtomicBool,
+    request: LimitRequest,
+) -> TrashDecision {
+    const POLL_INTERVAL: Duration = Duration::from_millis(200);
+    if events.send(CleanupEvent::TrashLimit(request)).is_err() {
+        return TrashDecision::Stop;
+    }
+    loop {
+        if cancel.load(Ordering::Relaxed) {
+            return TrashDecision::Stop;
+        }
+        match decisions.recv_timeout(POLL_INTERVAL) {
+            Ok(decision) => return decision,
+            Err(RecvTimeoutError::Timeout) => {}
+            Err(RecvTimeoutError::Disconnected) => return TrashDecision::Stop,
+        }
     }
 }
 
@@ -530,6 +675,44 @@ mod tests {
 
         drop(log);
         let _ = fs::remove_dir(&link);
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// С корзиной файлы не удаляются, а переносятся в неё; сама корзина, даже лежащая
+    /// внутри очищаемой папки, не трогается.
+    #[test]
+    fn cleanup_moves_files_to_trash_and_skips_the_trash_itself() {
+        let root = std::env::temp_dir().join(format!("hexcleaner_trash_engine_{}", std::process::id()));
+        let junk = root.join("junk");
+        fs::create_dir_all(junk.join("nested")).unwrap();
+        fs::write(junk.join("a.tmp"), "12345").unwrap();
+        fs::write(junk.join(r"nested\b.tmp"), "123").unwrap();
+        let trash_dir = junk.join("Trash");
+        fs::create_dir_all(&trash_dir).unwrap();
+        fs::write(trash_dir.join("old.bin"), "old").unwrap();
+
+        let settings = TrashSettings { limit: None, path: Some(trash_dir.clone()), ..TrashSettings::default() };
+        let mut session = TrashSession::new(&settings).unwrap();
+        let (sender, _events) = mpsc::channel();
+        let cancel = AtomicBool::new(false);
+        let mut log = CleanupLog::for_tests(&root.join("logs"));
+        let mut run = TaskRun::new(0, Mode::Clean, &mut log, &sender, &cancel);
+        run.task_id = "user_temp";
+        run.task_title = "Temp".into();
+        run.trash = Some(&mut session);
+        run.trash_context = TrashContext { dir: Some(&trash_dir), decisions: None, limit_reported: false };
+
+        files::clear_directory(&mut run, &junk, None);
+        assert_eq!((run.report.deleted_files, run.report.trashed_files, run.report.trashed_bytes), (2, 2, 8));
+        drop(run);
+
+        let id = session.finish().unwrap();
+        let moved = trash_dir.join(&id).join(crate::trash::mirror_path(&junk.join(r"nested\b.tmp")).unwrap());
+        assert!(moved.is_file(), "{}", moved.display());
+        assert!(!junk.join("a.tmp").exists() && !junk.join("nested").exists());
+        assert!(trash_dir.join("old.bin").exists(), "корзину очистили вместе с папкой!");
+
+        drop(log);
         let _ = fs::remove_dir_all(&root);
     }
 

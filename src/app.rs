@@ -1,5 +1,6 @@
 //! Главное окно программы.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::Arc;
@@ -22,6 +23,7 @@ use hexcleaner::presets::{self, ActivePreset, Selection};
 use hexcleaner::settings::Settings;
 use hexcleaner::system::admin;
 use hexcleaner::system::notification::{self, Notification};
+use hexcleaner::trash::{LimitRequest, RestoreReport, Trash, TrashDecision, TrashPolicy};
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 use hexcleaner::t;
 
@@ -29,8 +31,9 @@ use crate::disk_tab::DiskTab;
 use crate::progress::{CleanupProgress, TaskProgress, cleanup_progress};
 use crate::schedule_tab::ScheduleTab;
 use crate::settings_tab::{SettingsTab, egui_theme};
+use crate::trash_tab::{JobOwner, JobResult, TrashTab, TrashWorker, restore_summary};
 use crate::update_ui::Updater;
-use crate::widgets::{dot, dot_atom, shield_atom, shield_icon};
+use crate::widgets::{dot, dot_atom, shield_atom, shield_icon, undo_atom, warning_atom};
 
 /// Цвета результатов, подобранные под тёмную и светлую темы.
 struct Palette {
@@ -101,6 +104,7 @@ enum TaskState {
 enum Tab {
     Cleanup,
     Disk,
+    Trash,
     Schedule,
     Settings,
 }
@@ -113,6 +117,8 @@ enum Status {
     /// Закрываем программы, которые мешают очистке.
     ClosingPrograms,
     Running(Mode),
+    /// Файлы очистки упаковываются в корзине.
+    PackingTrash,
     Finished { mode: Mode, total: TaskReport, cancelled: bool },
     Error(String),
 }
@@ -149,6 +155,18 @@ pub struct HexCleanerApp {
     /// Нажатые боковые кнопки мыши (`true` — «Вперёд»), ещё не обработанные.
     side_buttons: Vec<bool>,
     disk_tab: DiskTab,
+    trash_tab: TrashTab,
+    /// Восстановление и удаление в корзине — по одной операции за раз.
+    trash_worker: TrashWorker,
+    /// Очистка в корзине, файлы которой можно вернуть кнопками у пунктов. Сбрасывается
+    /// новым анализом или очисткой — дальше вернуть их можно на вкладке «Корзина».
+    undo_run: Option<String>,
+    /// Пункты, файлы которых уже вернули, и итог.
+    restored: HashMap<usize, RestoreReport>,
+    /// Файлы не помещаются в лимит корзины: очистка ждёт ответа.
+    trash_limit: Option<LimitRequest>,
+    /// Очистку начали с зажатым Shift: удалить мимо корзины.
+    bypass_trash: bool,
     schedule_tab: ScheduleTab,
     settings_tab: SettingsTab,
     updater: Updater,
@@ -204,11 +222,22 @@ impl HexCleanerApp {
             tab: Tab::Cleanup,
             side_buttons: Vec::new(),
             disk_tab: DiskTab::default(),
+            trash_tab: TrashTab::default(),
+            trash_worker: TrashWorker::default(),
+            undo_run: None,
+            restored: HashMap::new(),
+            trash_limit: None,
+            bypass_trash: false,
             schedule_tab: ScheduleTab::default(),
             settings_tab: SettingsTab::new(),
             updater: Updater::new(),
         };
         app.updater.check_on_start(&app.settings);
+        // Очистки старше срока хранения удаляются и без новой очистки — в фоне.
+        if let Some(days) = app.settings.trash.keep_days {
+            let trash = Trash::new(app.settings.trash.directory());
+            thread::spawn(move || trash.remove_expired(days, chrono::Local::now()));
+        }
         if let Some(error) = language_error {
             app.status = Status::Error(error);
         }
@@ -265,6 +294,11 @@ impl HexCleanerApp {
     /// Запускает очистку или анализ отмеченных пунктов. Перед очисткой закрывает
     /// программы `close_programs` и, если `restart_programs`, после очистки запускает их снова.
     fn start(&mut self, mode: Mode, close_programs: Vec<String>, restart_programs: bool) {
+        // С Shift корзина для этой очистки отключается, но её папка по-прежнему не очищается.
+        let mut trash = self.settings.trash.clone();
+        if mode == Mode::Clean && std::mem::take(&mut self.bypass_trash) {
+            trash.limit = Some(0);
+        }
         // Очистке, начатой после анализа, известно, сколько файлов предстоит удалить.
         let selected = self.selected_indices();
         self.expected = (0..self.tasks.len())
@@ -275,14 +309,18 @@ impl HexCleanerApp {
             .collect();
 
         self.task_states.fill(TaskState::Idle);
+        self.undo_run = None;
+        self.restored.clear();
         self.mode = mode;
         self.status = Status::Running(mode);
         let options = CleanupOptions {
             mode,
             is_admin: self.is_admin,
-            compress_old_logs: self.settings.compress_old_logs,
+            log_compression: self.settings.compress_old_logs.then_some(self.settings.log_compression),
             close_programs,
             restart_programs,
+            trash: Some(trash),
+            ask_trash_limit: true,
         };
         self.job = Some(CleanupJob::start(Arc::clone(&self.tasks), selected, options));
     }
@@ -370,7 +408,10 @@ impl HexCleanerApp {
         match decision {
             ProgramsDecision::CloseAndClean => self.start(Mode::Clean, programs, restart),
             ProgramsDecision::CleanWithoutClosing => self.start(Mode::Clean, Vec::new(), false),
-            ProgramsDecision::Cancel => self.status = Status::Ready,
+            ProgramsDecision::Cancel => {
+                self.bypass_trash = false;
+                self.status = Status::Ready;
+            }
         }
     }
 
@@ -409,7 +450,18 @@ impl HexCleanerApp {
                 CleanupEvent::Progress(index, report) => self.task_states[index] = TaskState::Running(report),
                 CleanupEvent::TaskFinished(index, result) => self.task_states[index] = TaskState::Done(result),
                 CleanupEvent::TaskSkipped(index) => self.task_states[index] = TaskState::Skipped,
-                CleanupEvent::Finished { total, log_path, cancelled } => {
+                CleanupEvent::TrashLimit(request) => {
+                    self.trash_limit = Some(request);
+                    if let Some(window) = self.window
+                        && !is_focused(ctx)
+                    {
+                        notification::flash_taskbar(window);
+                    }
+                }
+                CleanupEvent::PackingTrash => self.status = Status::PackingTrash,
+                CleanupEvent::Finished { total, log_path, cancelled, trash_run } => {
+                    self.undo_run = trash_run;
+                    self.trash_tab.mark_dirty();
                     self.status = Status::Finished { mode: self.mode, total, cancelled };
                     self.last_log = Some(log_path);
                     finished = true;
@@ -725,6 +777,7 @@ impl HexCleanerApp {
             self.settings.set_selected(task.id, selected);
             self.settings.save();
         }
+        self.trash_policy_menu(&response, task);
 
         let result_color = match self.mode {
             Mode::Clean => palette.success,
@@ -733,8 +786,92 @@ impl HexCleanerApp {
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
             // Отступ под полосу прокрутки, чтобы она не закрывала цифры.
             ui.add_space(ui.spacing().scroll.bar_width + 4.0);
+            if let Some(report) = self.restored.get(&index) {
+                let color = if report.failed.is_empty() { result_color } else { palette.error };
+                ui.label(RichText::new(restore_summary(report)).color(color));
+                return;
+            }
+            self.undo_button(ui, index, task);
             Self::task_state_label(ui, &self.task_states[index], self.expected[index], result_color);
         });
+    }
+
+    /// Правый щелчок по пункту: что делать с его файлами — корзина или сразу удалить.
+    fn trash_policy_menu(&mut self, response: &egui::Response, task: &CleanupTask) {
+        if !task.deletes_files() || !self.settings.trash.is_enabled() {
+            return;
+        }
+        let mut chosen = None;
+        response.context_menu(|ui| {
+            ui.label(RichText::new(t!("trash.policy.menu_title")).strong());
+            let current = self.settings.trash.policy(task.id);
+            for policy in [TrashPolicy::Normal, TrashPolicy::Always, TrashPolicy::Never] {
+                if ui.radio(current == policy, trash_policy_name(policy)).clicked() {
+                    chosen = Some(policy);
+                    ui.close();
+                }
+            }
+        });
+        if let Some(policy) = chosen {
+            self.settings.trash.set_policy(task.id, policy);
+            self.settings.save();
+        }
+    }
+
+    /// Круговая стрелка у пункта, файлы которого только что ушли в корзину: вернуть их.
+    fn undo_button(&mut self, ui: &mut Ui, index: usize, task: &CleanupTask) {
+        let TaskState::Done(result) = &self.task_states[index] else { return };
+        let Some(run) = &self.undo_run else { return };
+        if result.report.trashed_files == 0 {
+            return;
+        }
+        if self.trash_worker.owner() == Some(JobOwner::Undo(index)) {
+            ui.spinner();
+            return;
+        }
+        let hint = t!("trash.undo_hint", files = result.report.trashed_files, size = format_size(result.report.trashed_bytes));
+        let button = Button::new(undo_atom(16.0)).frame(false);
+        let response = ui.add_enabled(!self.trash_worker.is_busy(), button).on_hover_text(&hint).on_disabled_hover_text(hint);
+        if response.clicked() {
+            let task_id = task.id.to_owned();
+            let filter = Box::new(move |item: &hexcleaner::trash::TrashItem, _: &hexcleaner::trash::TrashFile| item.task == task_id);
+            self.trash_worker.restore(JobOwner::Undo(index), self.settings.trash.directory(), run.clone(), filter);
+        }
+    }
+
+    /// Диалог «Файлы не помещаются в корзину»: очистка стоит, пока не ответят.
+    fn trash_limit_dialog(&mut self, ctx: &egui::Context) {
+        let Some(request) = self.trash_limit else { return };
+        let mut decision = None;
+        Modal::new(Id::unique("trash_limit")).show(ctx, |ui| {
+            ui.set_max_width(480.0);
+            ui.heading(t!("trash.limit.title"));
+            ui.label(t!(
+                "trash.limit.text",
+                used = format_size(request.used),
+                limit = format_size(request.limit),
+                needed = format_size(request.needed),
+            ));
+            ui.add_space(8.0);
+            let options = [
+                (TrashDecision::FreeSpace, t!("trash.limit.free_space"), t!("trash.limit.free_space.hint")),
+                (TrashDecision::IgnoreLimit, t!("trash.limit.ignore"), t!("trash.limit.ignore.hint")),
+                (TrashDecision::DeletePermanently, t!("trash.limit.delete"), t!("trash.limit.delete.hint")),
+                (TrashDecision::Stop, t!("trash.limit.stop"), t!("trash.limit.stop.hint")),
+            ];
+            for (option, label, hint) in options {
+                if ui.add(Button::new(label).min_size(vec2(ui.available_width(), 0.0))).on_hover_text(hint).clicked() {
+                    decision = Some(option);
+                }
+            }
+        });
+        // Закрыть диалог, не ответив, нельзя: очистка ждёт решения.
+        if let Some(decision) = decision {
+            if let Some(job) = &self.job {
+                job.answer_trash_limit(decision);
+            }
+            self.trash_limit = None;
+        }
     }
 
     /// Итог пункта справа в строке: счётчики, пояснение или «пропущено».
@@ -787,8 +924,20 @@ impl HexCleanerApp {
                     self.start(Mode::Analyze, Vec::new(), false);
                 }
 
-                let clean = Button::new(clean_label()).min_size(vec2(CLEAN_BUTTON_WIDTH, FOOTER_BUTTON_HEIGHT));
-                if ui.add_enabled(can_start, clean).clicked() {
+                // С зажатым Shift кнопка краснеет и удаляет мимо корзины.
+                let trash_enabled = self.settings.trash.is_enabled();
+                let bypass = trash_enabled && ui.input(|input| input.modifiers.shift);
+                let size = vec2(CLEAN_BUTTON_WIDTH, FOOTER_BUTTON_HEIGHT);
+                let (clean, hint) = if bypass {
+                    let text = RichText::new(t!("footer.clean_permanently")).strong().color(Color32::WHITE);
+                    let button = Button::new((warning_atom(16.0), text)).fill(Palette::of(ui).error).min_size(size);
+                    (button, t!("footer.clean_permanently.hint"))
+                } else {
+                    let hint = if trash_enabled { t!("footer.clean.hint_shift") } else { t!("footer.clean.hint_no_trash") };
+                    (Button::new(clean_label()).min_size(size), hint)
+                };
+                if ui.add_enabled(can_start, clean).on_hover_text(hint).clicked() {
+                    self.bypass_trash = bypass;
                     self.check_programs_and_clean();
                 }
             }
@@ -815,9 +964,10 @@ impl HexCleanerApp {
             Status::Ready => {
                 ui.label(RichText::new(t!("status.ready")).weak());
             }
-            Status::CheckingPrograms | Status::ClosingPrograms => {
+            Status::CheckingPrograms | Status::ClosingPrograms | Status::PackingTrash => {
                 let text = match self.status {
                     Status::CheckingPrograms => t!("status.checking_programs"),
+                    Status::PackingTrash => t!("status.packing_trash"),
                     _ => t!("status.closing_programs"),
                 };
                 ui.horizontal(|ui| {
@@ -866,6 +1016,10 @@ impl HexCleanerApp {
                 if total.freed_memory > 0 {
                     text += &t!("status.freed_memory", size = format_size(total.freed_memory));
                 }
+                // Перенесённое в корзину место на диске пока не освободило.
+                if total.trashed_bytes > 0 {
+                    text += &t!("status.trashed", size = format_size(total.trashed_bytes));
+                }
                 if total.failed > 0 {
                     text += &t!("status.failed", count = total.failed);
                 }
@@ -887,6 +1041,22 @@ impl eframe::App for HexCleanerApp {
         }
         self.process_cleanup_events(ctx);
         self.poll_programs_check(ctx);
+        if let Some((owner, result)) = self.trash_worker.poll(ctx) {
+            match (owner, result) {
+                (JobOwner::Undo(index), JobResult::Restored(report)) => {
+                    self.restored.insert(index, report);
+                    self.trash_tab.mark_dirty();
+                }
+                (_, JobResult::Removed(report)) => {
+                    self.disk_tab.removal_finished(report);
+                    self.trash_tab.mark_dirty();
+                }
+                (_, result) => self.trash_tab.job_finished(result),
+            }
+        }
+        if self.job.is_none() {
+            self.trash_limit = None;
+        }
         if let Some(exe) = self.updater.poll(ctx, &mut self.settings) {
             self.restart_after_update(ctx, &exe);
         }
@@ -917,6 +1087,7 @@ impl eframe::App for HexCleanerApp {
         }
 
         self.programs_dialog(ui.ctx());
+        self.trash_limit_dialog(ui.ctx());
         // Предложение обновиться не перекрывает диалог закрытия программ.
         if matches!(self.programs_check, ProgramsCheck::Idle) {
             let busy = self.is_cleaning();
@@ -930,6 +1101,7 @@ impl eframe::App for HexCleanerApp {
             ui.horizontal(|ui| {
                 ui.selectable_value(&mut self.tab, Tab::Cleanup, t!("tabs.cleanup"));
                 ui.selectable_value(&mut self.tab, Tab::Disk, t!("tabs.disk"));
+                ui.selectable_value(&mut self.tab, Tab::Trash, t!("tabs.trash"));
                 ui.selectable_value(&mut self.tab, Tab::Schedule, t!("tabs.schedule"));
                 ui.selectable_value(&mut self.tab, Tab::Settings, t!("tabs.settings"));
             });
@@ -946,14 +1118,20 @@ impl eframe::App for HexCleanerApp {
                     self.schedule_tab.ui(ui, &mut self.settings, &self.tasks, self.is_admin);
                 });
             }
+            Tab::Trash => {
+                CentralPanel::default().show(ui, |ui| self.trash_tab.ui(ui, &self.settings, &mut self.trash_worker));
+            }
             Tab::Disk => {
                 let window = self.window;
-                CentralPanel::default().show(ui, |ui| self.disk_tab.ui(ui, window));
+                CentralPanel::default().show(ui, |ui| {
+                    self.disk_tab.ui(ui, window, &self.settings, &mut self.trash_worker);
+                });
             }
             Tab::Settings => {
                 let busy = self.is_running();
                 CentralPanel::default().show(ui, |ui| {
-                    self.settings_tab.ui(ui, &mut self.settings, &mut self.updater, self.is_admin, busy);
+                    let (tasks, window) = (Arc::clone(&self.tasks), self.window);
+                    self.settings_tab.ui(ui, &mut self.settings, &tasks, &mut self.updater, self.is_admin, busy, window);
                 });
             }
         }
@@ -1003,6 +1181,15 @@ fn locations_grid(ui: &mut Ui, task_id: &str, locations: &[Location]) -> Option<
         ui.label(RichText::new(t!("locations.more", count = hidden)).weak());
     }
     open_in_disk_tab
+}
+
+/// Что делать с файлами пункта — на языке интерфейса.
+pub fn trash_policy_name(policy: TrashPolicy) -> String {
+    match policy {
+        TrashPolicy::Normal => t!("trash.policy.normal"),
+        TrashPolicy::Always => t!("trash.policy.always"),
+        TrashPolicy::Never => t!("trash.policy.never"),
+    }
 }
 
 /// Сокращает путь, заменяя известные папки переменными: `%LOCALAPPDATA%\Google\Chrome\...`.

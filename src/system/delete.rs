@@ -14,7 +14,7 @@ use windows::Win32::Security::Authorization::{GetNamedSecurityInfoW, SE_FILE_OBJ
 use windows::Win32::Security::{
     LookupAccountSidW, OWNER_SECURITY_INFORMATION, PSECURITY_DESCRIPTOR, PSID, SID_NAME_USE,
 };
-use windows::Win32::Storage::FileSystem::DeleteFileW;
+use windows::Win32::Storage::FileSystem::{DeleteFileW, MOVEFILE_COPY_ALLOWED, MoveFileExW};
 use windows::core::{HSTRING, PCWSTR, PWSTR};
 
 const STATUS_ACCESS_DENIED: NTSTATUS = NTSTATUS(0xC000_0022_u32 as i32);
@@ -61,6 +61,19 @@ pub fn delete_file(path: &Path) -> Result<(), DeleteError> {
     windows::core::link!("ntdll.dll" "system" fn RtlGetLastNtStatus() -> NTSTATUS);
 
     let result = unsafe { DeleteFileW(&HSTRING::from(path.as_os_str())) };
+    result.map_err(|error| DeleteError {
+        status: unsafe { RtlGetLastNtStatus() },
+        error: io::Error::from_raw_os_error(error.code().0 & 0xFFFF),
+    })
+}
+
+/// Переносит файл (в корзину или из неё). На другой диск Windows переносит копированием
+/// с удалением оригинала. Ошибка — та же, что у удаления: файл занят, нет прав и т. п.
+pub fn move_file(from: &Path, to: &Path) -> Result<(), DeleteError> {
+    windows::core::link!("ntdll.dll" "system" fn RtlGetLastNtStatus() -> NTSTATUS);
+
+    let result =
+        unsafe { MoveFileExW(&HSTRING::from(from.as_os_str()), &HSTRING::from(to.as_os_str()), MOVEFILE_COPY_ALLOWED) };
     result.map_err(|error| DeleteError {
         status: unsafe { RtlGetLastNtStatus() },
         error: io::Error::from_raw_os_error(error.code().0 & 0xFFFF),

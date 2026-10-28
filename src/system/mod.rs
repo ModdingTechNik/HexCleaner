@@ -1,6 +1,7 @@
 //! Обёртки над Windows API. Весь `unsafe` код программы собран здесь.
 
 pub mod admin;
+pub mod compact;
 pub mod console;
 pub mod delete;
 pub mod drives;

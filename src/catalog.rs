@@ -141,6 +141,14 @@ impl CleanupTask {
     pub fn description(&self) -> String {
         i18n::text(&format!("task.{}.description", self.id))
     }
+
+    /// Удаляет ли пункт файлы. Только такие можно переносить в корзину: журналы событий,
+    /// память и корзина Windows очищаются средствами системы.
+    pub fn deletes_files(&self) -> bool {
+        self.actions.iter().any(|action| {
+            matches!(action, Action::ClearDirectory { .. } | Action::DeleteDirectory { .. } | Action::DeleteFiles { .. })
+        })
+    }
 }
 
 fn clear_dir(pattern: impl Into<String>) -> Action {

@@ -8,6 +8,7 @@ mod disk_tab;
 mod progress;
 mod schedule_tab;
 mod settings_tab;
+mod trash_tab;
 mod update_ui;
 mod widgets;
 

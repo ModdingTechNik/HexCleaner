@@ -2,8 +2,9 @@
 //! Анализ тоже пишет журнал (отчёт): в нём только итоги по папкам, без списка файлов.
 //!
 //! Журналы сохраняются в `%LOCALAPPDATA%\HexCleaner\logs`. Журнал текущей очистки
-//! остаётся обычным текстом, а журналы прошлых очисток сжимаются в zip-архивы
-//! (по одному архиву на журнал) — так они занимают в 10–20 раз меньше места.
+//! остаётся обычным текстом, а журналы прошлых очисток сжимаются: в zip-архивы
+//! (по одному архиву на журнал, в 10–20 раз меньше места) или сжатием NTFS всей папки
+//! (журналы остаются обычными файлами).
 
 use std::fs::{self, File};
 use std::io::{self, BufWriter, Write};
@@ -15,6 +16,8 @@ use zip::{CompressionMethod, ZipWriter};
 
 use super::Mode;
 use super::report::{TaskReport, TaskResult, format_size};
+use crate::settings::Compression;
+use crate::system::compact;
 use crate::t;
 
 pub struct CleanupLog {
@@ -25,15 +28,20 @@ pub struct CleanupLog {
 
 impl CleanupLog {
     /// Создаёт новый файл журнала с текущей датой и временем в имени.
-    /// Если `compress_previous` — журналы прошлых очисток предварительно сжимаются.
-    pub fn create(mode: Mode, compress_previous: bool) -> io::Result<Self> {
+    /// С `compress_previous` журналы прошлых очисток предварительно сжимаются этим способом.
+    pub fn create(mode: Mode, compress_previous: Option<Compression>) -> io::Result<Self> {
         Self::create_in(&logs_directory(), mode, compress_previous)
     }
 
-    fn create_in(dir: &Path, mode: Mode, compress_previous: bool) -> io::Result<Self> {
+    fn create_in(dir: &Path, mode: Mode, compress_previous: Option<Compression>) -> io::Result<Self> {
         fs::create_dir_all(dir)?;
-        if compress_previous {
-            compress_previous_logs(dir);
+        match compress_previous {
+            Some(Compression::Zip) => compress_previous_logs(dir),
+            // Папка журналов помечается сжатой: старые и новые журналы сжимаются сами.
+            Some(Compression::Ntfs) => {
+                let _ = compact::compress_in_background(dir);
+            }
+            None => {}
         }
 
         let now = chrono::Local::now();
@@ -67,6 +75,11 @@ impl CleanupLog {
     pub fn deleted(&mut self, path: &Path, size: u64) {
         let size = format!("{:>10}", format_size(size));
         self.line(&t!("log.deleted", size = size, path = path.display()));
+    }
+
+    pub fn trashed(&mut self, path: &Path, size: u64) {
+        let size = format!("{:>10}", format_size(size));
+        self.line(&t!("log.trashed", size = size, path = path.display()));
     }
 
     pub fn failed(&mut self, path: &Path, reason: &str) {
@@ -105,6 +118,10 @@ impl CleanupLog {
         });
         if total.freed_memory > 0 {
             self.line(&t!("log.total_memory", size = format_size(total.freed_memory)));
+        }
+        if total.trashed_files > 0 {
+            let size = format_size(total.trashed_bytes);
+            self.line(&t!("log.total_trash", files = total.trashed_files, size = size));
         }
         self.line(&t!("log.finished", time = now_text()));
         let _ = self.writer.flush();
@@ -169,7 +186,7 @@ fn zip_date_time(time: &chrono::DateTime<chrono::Local>) -> zip::DateTime {
 #[cfg(test)]
 impl CleanupLog {
     pub fn for_tests(dir: &Path) -> Self {
-        Self::create_in(dir, Mode::Clean, true).unwrap()
+        Self::create_in(dir, Mode::Clean, Some(Compression::Zip)).unwrap()
     }
 }
 

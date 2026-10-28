@@ -161,9 +161,12 @@ fn run_cleanup(request: &RunRequest, settings: &Settings, exe: &str) -> ExitCode
     let options = CleanupOptions {
         mode: request.mode,
         is_admin,
-        compress_old_logs: request.compress_logs.unwrap_or(settings.compress_old_logs),
+        log_compression: request.compress_logs.unwrap_or(settings.compress_old_logs).then_some(settings.log_compression),
         close_programs: blocking_apps.iter().flat_map(|app| app.exes.clone()).collect(),
         restart_programs: request.restart_apps,
+        trash: Some(settings.trash.clone()),
+        // Спросить про лимит корзины некого: не поместившееся удаляется мимо неё.
+        ask_trash_limit: false,
     };
 
     console::catch_ctrl_c();
@@ -173,12 +176,12 @@ fn run_cleanup(request: &RunRequest, settings: &Settings, exe: &str) -> ExitCode
 
     loop {
         match job.wait_event(CTRL_C_CHECK_INTERVAL) {
-            Ok(CleanupEvent::ClosingPrograms) => {}
+            Ok(CleanupEvent::ClosingPrograms | CleanupEvent::PackingTrash | CleanupEvent::TrashLimit(_)) => {}
             Ok(CleanupEvent::TaskStarted(index)) => progress.task_started(index),
             Ok(CleanupEvent::Progress(..)) => {}
             Ok(CleanupEvent::TaskFinished(index, result)) => progress.task_finished(index, &result),
             Ok(CleanupEvent::TaskSkipped(index)) => progress.task_skipped(index),
-            Ok(CleanupEvent::Finished { total, log_path, cancelled }) => {
+            Ok(CleanupEvent::Finished { total, log_path, cancelled, .. }) => {
                 return progress.finish(&total, &log_path, cancelled);
             }
             Ok(CleanupEvent::Failed(message)) => {

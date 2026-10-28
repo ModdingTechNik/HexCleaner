@@ -14,6 +14,7 @@ use std::time::{Duration, SystemTime};
 use super::TaskRun;
 use crate::system::delete;
 use crate::t;
+use crate::trash::Stored;
 
 const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
 
@@ -49,6 +50,10 @@ pub fn clear_directory(run: &mut TaskRun, dir: &Path, min_age: Option<Duration>)
         if is_link(&metadata) {
             run.skipped(&path, &t!("skip.link"));
             is_empty = false;
+        } else if metadata.is_dir() && run.is_trash_directory(&path) {
+            // Корзина внутри очищаемой папки: её содержимое не мусор.
+            run.skipped(&path, &t!("skip.trash"));
+            is_empty = false;
         } else if metadata.is_dir() {
             // Возраст проверяем до очистки: после удаления файлов дата папки обновится.
             let old_enough = is_old_enough(&metadata, min_age);
@@ -73,7 +78,7 @@ pub fn delete_directory(run: &mut TaskRun, dir: &Path, metadata: &Metadata) {
     }
 }
 
-/// Удаляет один файл и записывает результат в статистику и журнал.
+/// Удаляет один файл (или переносит в корзину) и записывает результат в статистику и журнал.
 pub fn delete_file(run: &mut TaskRun, path: &Path, metadata: &Metadata) -> bool {
     if run.is_analysis() {
         run.record_file(path, metadata.len());
@@ -81,6 +86,18 @@ pub fn delete_file(run: &mut TaskRun, path: &Path, metadata: &Metadata) -> bool 
     }
 
     clear_readonly(path, metadata);
+    match run.move_to_trash(path, metadata.len()) {
+        Stored::Moved => {
+            run.record_trashed(path, metadata.len());
+            return true;
+        }
+        Stored::Failed(error) => {
+            run.delete_failed(path, &error);
+            return false;
+        }
+        Stored::Stopped => return false,
+        Stored::NotMoved => {}
+    }
     match delete::delete_file(path) {
         Ok(()) => {
             run.record_file(path, metadata.len());

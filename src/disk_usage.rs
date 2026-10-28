@@ -45,6 +45,21 @@ pub enum DirKind {
 }
 
 impl DirNode {
+    /// Учитывает удаление: вычитает `bytes` и `files` из папок по пути `relative` (включая эту
+    /// и последнюю). Если `remove_last`, последняя папка пути удаляется из дерева целиком.
+    pub fn subtract(&mut self, relative: &[String], bytes: u64, files: u64, remove_last: bool) {
+        self.size = self.size.saturating_sub(bytes);
+        self.files = self.files.saturating_sub(files);
+        let Some((first, rest)) = relative.split_first() else { return };
+        let Some(index) = self.children.iter().position(|child| child.name.eq_ignore_ascii_case(first)) else { return };
+        if rest.is_empty() && remove_last {
+            self.children.remove(index);
+        } else {
+            self.children[index].subtract(rest, bytes, files, remove_last);
+        }
+        sort_by_size(&mut self.children, |child| child.size, |child| &child.name);
+    }
+
     /// Вложенная папка по относительному пути `relative` (части пути — имена папок).
     pub fn find(&self, relative: &Path) -> Option<&DirNode> {
         let mut node = self;
@@ -303,6 +318,25 @@ mod tests {
         let list: Vec<(&str, u64)> = list.iter().map(|entry| (entry.name.as_str(), entry.size)).collect();
         assert_eq!(list, [("a.bin", 3000), ("inner", 2000)]);
         let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn subtract_updates_sizes_up_the_path() {
+        let leaf = DirNode { name: "c".into(), size: 30, files: 3, ..DirNode::default() };
+        let b = DirNode { name: "b".into(), size: 50, files: 5, children: vec![leaf], ..DirNode::default() };
+        let other = DirNode { name: "other".into(), size: 40, files: 1, ..DirNode::default() };
+        let mut root = DirNode { name: "root".into(), size: 90, files: 6, children: vec![b, other], ..DirNode::default() };
+
+        // Удалили папку b\c целиком.
+        root.subtract(&["b".into(), "c".into()], 30, 3, true);
+        assert_eq!((root.size, root.files), (60, 3));
+        // b стала меньше other и переместилась вниз.
+        assert_eq!(root.children[0].name, "other");
+        assert_eq!((root.children[1].size, root.children[1].children.len()), (20, 0));
+
+        // Файл в папке other: папка остаётся, размер уменьшается.
+        root.subtract(&["other".into()], 40, 1, false);
+        assert_eq!((root.size, root.children[1].size), (20, 0));
     }
 
     #[test]

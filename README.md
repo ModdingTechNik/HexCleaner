@@ -45,8 +45,8 @@ Both run on the same core and share the same settings.
   `%APPDATA%\HexCleaner\settings.json`. On first launch the language is taken from Windows settings.
 * Every cleanup writes a log to `%LOCALAPPDATA%\HexCleaner\logs`: all deleted files with their
   sizes, errors and totals for each item. If "Compress previous logs" is checked in the settings
-  (on by default), logs of previous cleanups are packed into zip archives (one per log)
-  before a new cleanup.
+  (on by default), logs of previous cleanups are compressed before a new cleanup: into zip archives
+  (one per log, the default) or with NTFS compression of the logs folder (logs stay plain text files).
 * Files in use are skipped. Temporary files younger than an hour are not deleted.
 * Before cleaning, the program uses Restart Manager to check whether running browsers or launchers
   (Steam, Epic) hold files of the selected items, and offers to close them — with checkboxes and
@@ -62,6 +62,31 @@ Both run on the same core and share the same settings.
   Drive roots, the user profile, Windows, Program Files and similar folders are protected from
   cleanup even if the catalog contains a mistake.
 
+## Trash
+
+Files of cleanup items can go to HexCleaner's own trash instead of being deleted. Each cleanup
+gets its own folder that repeats the full path of every file, with a folder named after the drive
+letter instead of the drive: `C:\Windows\Temp\a.tmp` → `Trash\2026-10-28 14-03-12\c\Windows\Temp\a.tmp`.
+Next to it, `2026-10-28 14-03-12.json` records which item moved which file. The default folder is
+`%LOCALAPPDATA%\HexCleaner\Trash`; the trash folder itself is never cleaned, even inside a cleaned folder.
+
+* For each item you choose what to do with its files: "To the trash, within the limit" (default),
+  "Always to the trash" or "Delete right away" — in the settings or by right-clicking the item.
+  Memory, event logs and the Windows Recycle Bin are cleared by the system and do not use the trash.
+* After a cleanup, every item that moved files to the trash has a counter-clockwise arrow button
+  that returns them. Holding Shift turns "Start cleanup" into a red "Delete permanently" button with
+  a warning sign: that cleanup bypasses the trash. A new analysis or cleanup resets these buttons; after that (or after a restart)
+  everything can be restored on the "Trash" tab: a whole cleanup, an item, a folder or single files.
+  Files whose place is already taken by newer ones stay in the trash.
+* If the files do not fit into the limit, the cleanup pauses and asks: free up space (delete the
+  oldest cleanups from the trash), ignore the limit, delete without the trash or stop.
+  The command line (and scheduled cleanups) cannot ask, so files that do not fit are deleted.
+* Settings: the trash size slider with an exact number of gigabytes next to it (far left — disabled,
+  far right — unlimited, 5 GB by default), how many days to keep cleanups (older ones are deleted at
+  program start and before every cleanup; off by default),
+  compression (NTFS — the file system compresses the files; ZIP — each cleanup is packed into
+  `<cleanup>.zip` with the same structure) and the trash folder.
+
 ## Disk space
 
 The "Disk space" tab shows what takes up space on a drive or in a folder. Choose a drive
@@ -69,7 +94,9 @@ The "Disk space" tab shows what takes up space on a drive or in a folder. Choose
 The folder is scanned in the background (several threads; it can be stopped), then its contents
 are listed from the largest to the smallest: folders with the size of everything inside and their
 file count, and files. Clicking a folder opens it; "Up" and the clickable path go back, and going
-above the scanned folder scans its parent. "← Back" and "Forward →" (and the side mouse
+above the scanned folder scans its parent. The right-click menu also has "Delete to trash";
+with Shift held it turns into "Delete permanently" with a warning sign. Drive roots, Windows,
+Program Files, the user profile and the trash itself cannot be deleted there. "← Back" and "Forward →" (and the side mouse
 buttons) walk the history of opened folders. Right-click a row to show it in Explorer or copy its path.
 
 Next to the list there is a donut chart of the open folder. Items smaller than 3 % are merged
@@ -231,12 +258,14 @@ This rebuilds `assets/icon.ico` (all Windows sizes) and `assets/icon-256.png`
 | `src/system/` | Windows API wrappers (rights, services, event logs, memory, Restart Manager, HTTPS, SHA-256). All `unsafe` code lives here |
 | `src/settings.rs` | Saving the selected items, presets and settings |
 | `src/disk_usage.rs` | Disk space: scanning a folder into a tree of folders with sizes |
+| `src/trash/` | Trash: moving files during cleanup, the list of cleanups, restoring, the limit |
 | `src/update.rs` | Updating from GitHub releases: version check, download, installation |
 | `src/cli/` | Command line: argument parsing, item selection, output, exit codes |
 | `src/schedule.rs` | A scheduled task and its XML for Task Scheduler |
 | `src/main.rs`, `src/app.rs`, `src/widgets.rs` | The window (`HexCleaner.exe`) |
 | `src/schedule_tab.rs`, `src/progress.rs` | The scheduled cleanup tab, cleanup progress after analysis |
 | `src/disk_tab.rs` | The "Disk space" tab: list and chart |
+| `src/trash_tab.rs` | The "Trash" tab and background trash operations |
 | `src/settings_tab.rs`, `src/update_ui.rs` | The "Settings" tab, the update dialog |
 | `src/bin/cli.rs` | The command line (`HexCleanerCli.exe`) |
 | `tests/cli.rs`, `tests/gui.rs` | Tests of `HexCleanerCli.exe` and of `HexCleaner.exe` arguments as finished programs |

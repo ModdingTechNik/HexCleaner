@@ -33,6 +33,9 @@ pub struct TaskReport {
     pub failed: u64,
     /// Сколько оперативной памяти освобождено, в байтах (только для очистки памяти).
     pub freed_memory: u64,
+    /// Сколько из удалённых файлов перенесено в корзину (они входят и в `deleted_files`).
+    pub trashed_files: u64,
+    pub trashed_bytes: u64,
 }
 
 impl AddAssign for TaskReport {
@@ -41,6 +44,8 @@ impl AddAssign for TaskReport {
         self.freed_bytes += other.freed_bytes;
         self.failed += other.failed;
         self.freed_memory += other.freed_memory;
+        self.trashed_files += other.trashed_files;
+        self.trashed_bytes += other.trashed_bytes;
     }
 }
 
@@ -51,6 +56,9 @@ impl TaskReport {
         if self.deleted_files > 0 || self.freed_bytes > 0 {
             parts.push(t!("report.files", count = self.deleted_files));
             parts.push(format_size(self.freed_bytes));
+        }
+        if self.trashed_bytes > 0 {
+            parts.push(t!("report.trashed", size = format_size(self.trashed_bytes)));
         }
         if self.freed_memory > 0 {
             parts.push(t!("report.memory", size = format_size(self.freed_memory)));

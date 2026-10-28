@@ -74,7 +74,7 @@ mod tests {
     use super::*;
 
     fn report(files: u64, bytes: u64, failed: u64) -> TaskReport {
-        TaskReport { deleted_files: files, freed_bytes: bytes, failed, freed_memory: 0 }
+        TaskReport { deleted_files: files, freed_bytes: bytes, failed, ..TaskReport::default() }
     }
 
     #[test]

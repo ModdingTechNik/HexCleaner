@@ -13,15 +13,19 @@ use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use eframe::egui::{
-    self, Align, Align2, Button, Color32, ComboBox, FontId, Key, Label, Layout, Mesh, Pos2, Rect, Response,
-    RichText, ScrollArea, Sense, Shape, Stroke, TextEdit, Ui, vec2,
+    self, Align, Align2, Button, Color32, ComboBox, FontId, Id, Key, Label, Layout, Mesh, Modal, Pos2, Rect,
+    Response, RichText, ScrollArea, Sense, Shape, Stroke, TextEdit, Ui, vec2,
 };
-use hexcleaner::cleaner::format_size;
+use hexcleaner::cleaner::{format_size, is_protected};
 use hexcleaner::disk_usage::{self, DirKind, DirNode, Entry, EntryKind, ScanJob, Slice};
+use hexcleaner::settings::Settings;
 use hexcleaner::system::drives::{self, Drive};
 use hexcleaner::t;
+use hexcleaner::trash::{RemoveReport, Trash, TrashDecision};
 
 use crate::app::open_in_explorer;
+use crate::trash_tab::{JobOwner, TrashWorker};
+use crate::widgets::warning_atom;
 
 /// Элементы меньше этой доли объединяются в сектор «Остальное».
 const MIN_SLICE_SHARE: f64 = 0.03;
@@ -67,6 +71,38 @@ pub struct DiskTab {
     back: Vec<PathBuf>,
     forward: Vec<PathBuf>,
     error: Option<String>,
+    /// Удаление ждёт подтверждения.
+    delete_request: Option<DeleteRequest>,
+    /// Идёт удаление: по окончании его итог вычитается из дерева.
+    deleting: Option<DeleteRequest>,
+    /// Итог последнего удаления; `true` — были ошибки.
+    delete_message: Option<(String, bool)>,
+}
+
+/// Что удалить и как.
+#[derive(Clone)]
+struct DeleteRequest {
+    path: PathBuf,
+    /// Папка, в которой лежит удаляемое: имена папок от корня сканирования.
+    parent: Vec<String>,
+    name: String,
+    is_dir: bool,
+    size: u64,
+    files: u64,
+    /// Мимо корзины.
+    permanent: bool,
+    /// Сколько занято в корзине и её лимит — чтобы заранее предупредить о нехватке места.
+    trash_used: u64,
+    trash_limit: Option<u64>,
+}
+
+/// Что строкам списка нужно знать для пункта «Удалить» в меню.
+struct DeleteContext {
+    /// Корзина включена: без Shift удаление идёт в неё.
+    trash_enabled: bool,
+    trash_dir: PathBuf,
+    /// Другая операция с корзиной ещё идёт.
+    busy: bool,
 }
 
 struct ScanResult {
@@ -88,6 +124,8 @@ enum Action {
     CollapseRest,
     Back,
     Forward,
+    /// Спросить, удалять ли элемент списка с этим номером; `true` — мимо корзины.
+    AskDelete(usize, bool),
 }
 
 impl DiskTab {
@@ -205,7 +243,7 @@ impl DiskTab {
         false
     }
 
-    pub fn ui(&mut self, ui: &mut Ui, window: Option<isize>) {
+    pub fn ui(&mut self, ui: &mut Ui, window: Option<isize>, settings: &Settings, worker: &mut TrashWorker) {
         self.poll_scan(ui);
         if !self.drives_loaded {
             self.drives = drives::list();
@@ -230,6 +268,16 @@ impl DiskTab {
             });
         }
 
+        if worker.owner() == Some(JobOwner::DiskTab) {
+            ui.horizontal(|ui| {
+                ui.spinner();
+                ui.label(t!("disk.deleting"));
+            });
+        } else if let Some((message, is_error)) = &self.delete_message {
+            let color = if *is_error { ui.visuals().error_fg_color } else { ui.visuals().text_color() };
+            ui.label(RichText::new(message).color(color));
+        }
+
         if self.result.is_none() {
             if self.scan.is_none() {
                 ui.add_space(12.0);
@@ -238,12 +286,140 @@ impl DiskTab {
         } else {
             self.navigation(ui, &mut action);
             ui.separator();
-            self.content(ui, &mut action);
+            let context = DeleteContext {
+                trash_enabled: settings.trash.is_enabled(),
+                trash_dir: settings.trash.directory(),
+                busy: worker.is_busy() || self.scan.is_some(),
+            };
+            self.content(ui, &mut action, &context);
         }
 
         if let Some(action) = action {
-            self.apply(action);
+            match action {
+                Action::AskDelete(index, permanent) => self.ask_delete(index, permanent, settings),
+                action => self.apply(action),
+            }
         }
+        self.delete_dialog(ui.ctx(), settings, worker);
+    }
+
+    /// Готовит подтверждение удаления элемента списка.
+    fn ask_delete(&mut self, index: usize, permanent: bool, settings: &Settings) {
+        let (Some(entry), Some(dir)) = (self.entries.get(index), self.current_path()) else { return };
+        let (is_dir, files) = match entry.kind {
+            EntryKind::Dir { files, .. } => (true, files),
+            EntryKind::File => (false, 1),
+        };
+        let permanent = permanent || !settings.trash.is_enabled();
+        let trash_used = if permanent { 0 } else { Trash::new(settings.trash.directory()).used_bytes() };
+        self.delete_request = Some(DeleteRequest {
+            path: dir.join(&entry.name),
+            parent: self.current.clone(),
+            name: entry.name.clone(),
+            is_dir,
+            size: entry.size,
+            files,
+            permanent,
+            trash_used,
+            trash_limit: settings.trash.limit,
+        });
+    }
+
+    /// Подтверждение удаления. Если в корзину не помещается — те же варианты, что при очистке.
+    fn delete_dialog(&mut self, ctx: &egui::Context, settings: &Settings, worker: &mut TrashWorker) {
+        let Some(request) = self.delete_request.clone() else { return };
+        let fits = request.trash_limit.is_none_or(|limit| request.trash_used + request.size <= limit);
+        let mut answer: Option<Option<(bool, TrashDecision)>> = None;
+
+        let modal = Modal::new(Id::unique("disk_delete")).show(ctx, |ui| {
+            ui.set_max_width(480.0);
+            let what = if request.is_dir {
+                t!("disk.delete.folder", name = &request.name, size = format_size(request.size), files = request.files)
+            } else {
+                t!("disk.delete.file", name = &request.name, size = format_size(request.size))
+            };
+            if request.permanent {
+                let title = RichText::new(t!("disk.delete.permanent_title")).heading();
+                ui.add(Button::new((warning_atom(20.0), title)).frame(false));
+                ui.label(t!("disk.delete.permanent_text", what = what));
+            } else {
+                ui.heading(t!("disk.delete.trash_title"));
+                ui.label(t!("disk.delete.trash_text", what = what));
+                if !fits {
+                    let limit = request.trash_limit.map_or_else(String::new, format_size);
+                    let text = t!("disk.delete.no_room", used = format_size(request.trash_used), limit = limit);
+                    ui.label(RichText::new(text).color(ui.visuals().warn_fg_color));
+                }
+            }
+            ui.add_space(8.0);
+
+            let wide = |ui: &mut Ui, button: Button| ui.add(button.min_size(vec2(ui.available_width(), 0.0)));
+            if request.permanent {
+                let text = RichText::new(t!("disk.delete.confirm_permanent")).strong();
+                if wide(ui, Button::new((warning_atom(16.0), text))).clicked() {
+                    answer = Some(Some((true, TrashDecision::DeletePermanently)));
+                }
+            } else if fits {
+                if wide(ui, Button::new(RichText::new(t!("disk.delete.confirm_trash")).strong())).clicked() {
+                    answer = Some(Some((false, TrashDecision::IgnoreLimit)));
+                }
+            } else {
+                let options = [
+                    (TrashDecision::FreeSpace, t!("trash.limit.free_space"), t!("trash.limit.free_space.hint")),
+                    (TrashDecision::IgnoreLimit, t!("trash.limit.ignore"), t!("trash.limit.ignore.hint")),
+                ];
+                for (decision, label, hint) in options {
+                    if wide(ui, Button::new(label)).on_hover_text(hint).clicked() {
+                        answer = Some(Some((false, decision)));
+                    }
+                }
+                if wide(ui, Button::new((warning_atom(16.0), t!("trash.limit.delete")))).clicked() {
+                    answer = Some(Some((true, TrashDecision::DeletePermanently)));
+                }
+            }
+            if wide(ui, Button::new(t!("disk.delete.cancel"))).clicked() {
+                answer = Some(None);
+            }
+        });
+        if modal.should_close() && answer.is_none() {
+            answer = Some(None);
+        }
+
+        let Some(answer) = answer else { return };
+        self.delete_request = None;
+        let Some((permanent, decision)) = answer else { return };
+        let trash = (!permanent).then(|| settings.trash.clone());
+        worker.remove(JobOwner::DiskTab, request.path.clone(), t!("tabs.disk"), trash, decision);
+        self.delete_message = None;
+        self.deleting = Some(DeleteRequest { permanent, ..request });
+    }
+
+    /// Удаление закончилось: вычитаем удалённое из дерева и перечитываем открытую папку.
+    pub fn removal_finished(&mut self, report: RemoveReport) {
+        let Some(request) = self.deleting.take() else { return };
+        if let Some(result) = &mut self.result {
+            let whole = report.failed.is_empty();
+            let mut path = request.parent.clone();
+            if request.is_dir {
+                path.push(request.name.clone());
+            }
+            result.tree.subtract(&path, report.bytes, report.files, request.is_dir && whole);
+        }
+        self.refresh_entries();
+
+        let size = format_size(report.bytes);
+        let mut message = if report.trash_run.is_some() {
+            t!("disk.deleted_to_trash", files = report.files, size = size)
+        } else {
+            t!("disk.deleted_permanently", files = report.files, size = size)
+        };
+        if !report.failed.is_empty() {
+            message += &t!("disk.delete_failed", count = report.failed.len());
+            if let Some((path, reason)) = report.failed.first() {
+                message += &format!("\n{}: {reason}", path.display());
+            }
+        }
+        self.delete_message = Some((message, !report.failed.is_empty()));
     }
 
     fn apply(&mut self, action: Action) {
@@ -268,6 +444,8 @@ impl DiskTab {
             }
             Action::Back => self.go_back(),
             Action::Forward => self.go_forward(),
+            // Удаление сначала подтверждается — см. `ask_delete`.
+            Action::AskDelete(..) => {}
         }
     }
 
@@ -378,7 +556,7 @@ impl DiskTab {
     }
 
     /// Список слева, диаграмма справа (если хватает ширины).
-    fn content(&self, ui: &mut Ui, action: &mut Option<Action>) {
+    fn content(&self, ui: &mut Ui, action: &mut Option<Action>, context: &DeleteContext) {
         let colors = self.slice_colors();
         let total = self.current_node().map_or(0, |node| node.size);
         let available = ui.available_size();
@@ -391,7 +569,7 @@ impl DiskTab {
         ui.horizontal_top(|ui| {
             ui.allocate_ui_with_layout(vec2(list_width, available.y), column, |ui| {
                 ui.set_width(list_width);
-                self.list(ui, total, &colors, action);
+                self.list(ui, total, &colors, action, context);
             });
             if show_chart {
                 ui.allocate_ui_with_layout(vec2(CHART_WIDTH, available.y), column, |ui| {
@@ -403,7 +581,14 @@ impl DiskTab {
     }
 
     /// Содержимое открытой папки: от больших к меньшим.
-    fn list(&self, ui: &mut Ui, total: u64, colors: &HashMap<usize, Color32>, action: &mut Option<Action>) {
+    fn list(
+        &self,
+        ui: &mut Ui,
+        total: u64,
+        colors: &HashMap<usize, Color32>,
+        action: &mut Option<Action>,
+        context: &DeleteContext,
+    ) {
         if self.entries.is_empty() {
             ui.label(RichText::new(t!("disk.empty_folder")).weak());
             return;
@@ -415,7 +600,8 @@ impl DiskTab {
                 let row = vec2(ui.available_width(), ROW_HEIGHT);
                 ui.allocate_ui_with_layout(row, Layout::left_to_right(Align::Center), |ui| {
                     ui.set_height(ROW_HEIGHT);
-                    entry_row(ui, entry, &dir, total, colors.get(&index).copied(), action);
+                    let row = Row { index, entry, dir: &dir, total, color: colors.get(&index).copied() };
+                    entry_row(ui, &row, action, context);
                 });
             }
         });
@@ -532,8 +718,18 @@ impl DiskTab {
     }
 }
 
+/// Строка списка: элемент, его номер, папка, в которой он лежит, размер этой папки и цвет на диаграмме.
+struct Row<'a> {
+    index: usize,
+    entry: &'a Entry,
+    dir: &'a Path,
+    total: u64,
+    color: Option<Color32>,
+}
+
 /// Строка списка: цвет на диаграмме, имя, размер, доля, число файлов.
-fn entry_row(ui: &mut Ui, entry: &Entry, dir: &Path, total: u64, color: Option<Color32>, action: &mut Option<Action>) {
+fn entry_row(ui: &mut Ui, row: &Row, action: &mut Option<Action>, context: &DeleteContext) {
+    let Row { entry, dir, total, color, .. } = *row;
     let (dot, _) = ui.allocate_exact_size(vec2(10.0, 10.0), Sense::hover());
     if let Some(color) = color {
         ui.painter().circle_filled(dot.center(), 4.5, color);
@@ -566,16 +762,18 @@ fn entry_row(ui: &mut Ui, entry: &Entry, dir: &Path, total: u64, color: Option<C
             if can_enter && response.clicked() {
                 *action = Some(Action::Enter(entry.name.clone()));
             }
-            entry_menu(&response, &path, is_dir, can_enter, &entry.name, action);
+            entry_menu(&response, row, &path, action, context);
         });
     });
 }
 
-/// Меню по правому щелчку: открыть, показать в проводнике, скопировать путь.
-fn entry_menu(response: &Response, path: &Path, is_dir: bool, can_enter: bool, name: &str, action: &mut Option<Action>) {
+/// Меню по правому щелчку: открыть, показать в проводнике, скопировать путь, удалить.
+fn entry_menu(response: &Response, row: &Row, path: &Path, action: &mut Option<Action>, context: &DeleteContext) {
+    let is_dir = matches!(row.entry.kind, EntryKind::Dir { .. });
+    let can_enter = matches!(row.entry.kind, EntryKind::Dir { kind: DirKind::Normal, .. });
     response.context_menu(|ui| {
         if can_enter && ui.button(t!("disk.menu.open")).clicked() {
-            *action = Some(Action::Enter(name.to_owned()));
+            *action = Some(Action::Enter(row.entry.name.clone()));
         }
         if ui.button(t!("disk.menu.show_in_explorer")).clicked() {
             if is_dir {
@@ -587,7 +785,35 @@ fn entry_menu(response: &Response, path: &Path, is_dir: bool, can_enter: bool, n
         if ui.button(t!("disk.menu.copy_path")).clicked() {
             ui.ctx().copy_text(path.display().to_string());
         }
+        ui.separator();
+
+        // С зажатым Shift пункт прямо в открытом меню меняется на «Удалить навсегда».
+        let permanent = !context.trash_enabled || ui.input(|input| input.modifiers.shift);
+        let protected = is_protected(path) || is_inside(path, &context.trash_dir) || is_inside(&context.trash_dir, path);
+        let button = if permanent {
+            Button::new((warning_atom(14.0), t!("disk.menu.delete_permanently")))
+        } else {
+            Button::new(t!("disk.menu.delete_to_trash"))
+        };
+        let hint = if protected {
+            t!("disk.menu.delete_protected")
+        } else if permanent {
+            t!("disk.menu.delete_permanently.hint")
+        } else {
+            t!("disk.menu.delete_to_trash.hint")
+        };
+        let response = ui.add_enabled(!protected && !context.busy, button).on_hover_text(&hint).on_disabled_hover_text(hint);
+        if response.clicked() {
+            *action = Some(Action::AskDelete(row.index, permanent));
+        }
     });
+}
+
+/// Лежит ли `path` внутри `dir` (или совпадает с ней). Без учёта регистра, как в Windows.
+fn is_inside(path: &Path, dir: &Path) -> bool {
+    let (path, dir) = (path.to_string_lossy().to_lowercase(), dir.to_string_lossy().to_lowercase());
+    let dir = dir.trim_end_matches('\\');
+    path.trim_end_matches('\\') == dir || path.starts_with(&format!("{dir}\\"))
 }
 
 /// Доля от открытой папки: полоска и проценты.
