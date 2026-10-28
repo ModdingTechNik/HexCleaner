@@ -69,7 +69,8 @@ The "Disk space" tab shows what takes up space on a drive or in a folder. Choose
 The folder is scanned in the background (several threads; it can be stopped), then its contents
 are listed from the largest to the smallest: folders with the size of everything inside and their
 file count, and files. Clicking a folder opens it; "Up" and the clickable path go back, and going
-above the scanned folder scans its parent. Right-click a row to show it in Explorer or copy its path.
+above the scanned folder scans its parent. "← Back" and "Forward →" (and the side mouse
+buttons) walk the history of opened folders. Right-click a row to show it in Explorer or copy its path.
 
 Next to the list there is a donut chart of the open folder. Items smaller than 3 % are merged
 into one "Other" sector; clicking it expands it into its own chart ("← Back" returns), clicking

@@ -10,7 +10,7 @@ use std::time::Duration;
 use eframe::egui::collapsing_header::CollapsingState;
 use eframe::egui::{
     self, Align, Button, CentralPanel, Checkbox, Color32, ComboBox, Grid, Id, Key, Label, Layout, Modal, Panel,
-    Popup, ProgressBar, RichText, ScrollArea, TextEdit, TextStyle, TextWrapMode, Ui, WidgetText, vec2,
+    PointerButton, Popup, ProgressBar, RichText, ScrollArea, TextEdit, TextStyle, TextWrapMode, Ui, WidgetText, vec2,
 };
 
 use hexcleaner::catalog::{self, CleanupTask, Safety};
@@ -146,6 +146,8 @@ pub struct HexCleanerApp {
     /// Итоги анализа для пунктов текущей очистки; у остальных пунктов — `None`.
     expected: Vec<Option<TaskReport>>,
     tab: Tab,
+    /// Нажатые боковые кнопки мыши (`true` — «Вперёд»), ещё не обработанные.
+    side_buttons: Vec<bool>,
     disk_tab: DiskTab,
     schedule_tab: ScheduleTab,
     settings_tab: SettingsTab,
@@ -200,6 +202,7 @@ impl HexCleanerApp {
             analysis: vec![None; task_count],
             expected: vec![None; task_count],
             tab: Tab::Cleanup,
+            side_buttons: Vec::new(),
             disk_tab: DiskTab::default(),
             schedule_tab: ScheduleTab::default(),
             settings_tab: SettingsTab::new(),
@@ -889,7 +892,30 @@ impl eframe::App for HexCleanerApp {
         }
     }
 
+    /// Боковые кнопки мыши — «Назад» и «Вперёд». egui считает их обычными кнопками и начинает
+    /// ими выделять текст в подписях, поэтому их нажатия забираем себе до того, как он их увидит.
+    fn raw_input_hook(&mut self, _ctx: &egui::Context, raw_input: &mut egui::RawInput) {
+        raw_input.events.retain(|event| match event {
+            egui::Event::PointerButton { button: button @ (PointerButton::Extra1 | PointerButton::Extra2), pressed, .. } => {
+                if *pressed {
+                    self.side_buttons.push(*button == PointerButton::Extra2);
+                }
+                false
+            }
+            _ => true,
+        });
+    }
+
     fn ui(&mut self, ui: &mut Ui, _frame: &mut eframe::Frame) {
+        for forward in std::mem::take(&mut self.side_buttons) {
+            // Назад и вперёд пока есть только на вкладке «Место на диске».
+            match (self.tab, forward) {
+                (Tab::Disk, false) => self.disk_tab.go_back(),
+                (Tab::Disk, true) => self.disk_tab.go_forward(),
+                _ => {}
+            }
+        }
+
         self.programs_dialog(ui.ctx());
         // Предложение обновиться не перекрывает диалог закрытия программ.
         if matches!(self.programs_check, ProgramsCheck::Idle) {

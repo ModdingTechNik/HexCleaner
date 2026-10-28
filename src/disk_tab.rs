@@ -63,6 +63,9 @@ pub struct DiskTab {
     entries: Vec<Entry>,
     /// Раскрытые секторы «Остальное»: номера элементов на каждом уровне раскрытия.
     chart_stack: Vec<Vec<usize>>,
+    /// Папки для «Назад» и «Вперёд» (кнопки и боковые кнопки мыши), последняя — ближайшая.
+    back: Vec<PathBuf>,
+    forward: Vec<PathBuf>,
     error: Option<String>,
 }
 
@@ -83,11 +86,56 @@ enum Action {
     Up(usize),
     ExpandRest(Vec<usize>),
     CollapseRest,
+    Back,
+    Forward,
 }
 
 impl DiskTab {
-    /// Открывает папку: если она внутри уже отсканированной — сразу, иначе сканирует её.
+    /// Открывает папку и запоминает переход для «Назад».
     pub fn open(&mut self, path: PathBuf) {
+        self.record(|tab| tab.show(path));
+    }
+
+    /// «Назад»: сначала сворачивает раскрытое «Остальное», затем возвращает к предыдущей папке.
+    pub fn go_back(&mut self) {
+        if self.chart_stack.pop().is_some() {
+            return;
+        }
+        let Some(path) = self.back.pop() else { return };
+        if let Some(location) = self.location() {
+            self.forward.push(location);
+        }
+        self.show(path);
+    }
+
+    /// «Вперёд»: к папке, из которой вернулись «Назад».
+    pub fn go_forward(&mut self) {
+        let Some(path) = self.forward.pop() else { return };
+        if let Some(location) = self.location() {
+            self.back.push(location);
+        }
+        self.show(path);
+    }
+
+    /// Выполняет переход `change` и, если папка сменилась, запоминает прежнюю для «Назад».
+    fn record(&mut self, change: impl FnOnce(&mut Self)) {
+        let before = self.location();
+        change(self);
+        if let Some(before) = before
+            && self.location().as_ref() != Some(&before)
+        {
+            self.back.push(before);
+            self.forward.clear();
+        }
+    }
+
+    /// Папка, которая открыта или сканируется, чтобы открыться.
+    fn location(&self) -> Option<PathBuf> {
+        self.scan.as_ref().map(|scan| scan.root.clone()).or_else(|| self.current_path())
+    }
+
+    /// Открывает папку: если она внутри уже отсканированной — сразу, иначе сканирует её.
+    fn show(&mut self, path: PathBuf) {
         self.error = None;
         if let Some(result) = &self.result
             && !result.cancelled
@@ -139,18 +187,22 @@ impl DiskTab {
     }
 
     fn poll_scan(&mut self, ui: &Ui) {
-        let Some(scan) = &self.scan else { return };
-        match scan.try_result() {
-            Some(tree) => {
-                let root = scan.root.clone();
-                let cancelled = scan.is_cancelled();
-                self.scan = None;
-                self.result = Some(ScanResult { root, tree, cancelled });
-                self.current.clear();
-                self.refresh_entries();
-            }
-            None => ui.ctx().request_repaint_after(Duration::from_millis(100)),
+        if self.finish_scan() {
+            ui.ctx().request_repaint_after(Duration::from_millis(100));
         }
+    }
+
+    /// Забирает результат законченного сканирования. Возвращает `true`, если сканирование ещё идёт.
+    fn finish_scan(&mut self) -> bool {
+        let Some(scan) = &self.scan else { return false };
+        let Some(tree) = scan.try_result() else { return true };
+        let root = scan.root.clone();
+        let cancelled = scan.is_cancelled();
+        self.scan = None;
+        self.result = Some(ScanResult { root, tree, cancelled });
+        self.current.clear();
+        self.refresh_entries();
+        false
     }
 
     pub fn ui(&mut self, ui: &mut Ui, window: Option<isize>) {
@@ -202,18 +254,20 @@ impl DiskTab {
                     self.start_scan(path);
                 }
             }
-            Action::Enter(name) => {
-                self.current.push(name);
-                self.refresh_entries();
-            }
-            Action::Up(levels) => {
-                self.current.truncate(self.current.len().saturating_sub(levels));
-                self.refresh_entries();
-            }
+            Action::Enter(name) => self.record(|tab| {
+                tab.current.push(name);
+                tab.refresh_entries();
+            }),
+            Action::Up(levels) => self.record(|tab| {
+                tab.current.truncate(tab.current.len().saturating_sub(levels));
+                tab.refresh_entries();
+            }),
             Action::ExpandRest(items) => self.chart_stack.push(items),
             Action::CollapseRest => {
                 self.chart_stack.pop();
             }
+            Action::Back => self.go_back(),
+            Action::Forward => self.go_forward(),
         }
     }
 
@@ -261,6 +315,15 @@ impl DiskTab {
         let (Some(result), Some(path)) = (&self.result, self.current_path()) else { return };
 
         ui.horizontal_wrapped(|ui| {
+            let can_go_back = !self.back.is_empty() || !self.chart_stack.is_empty();
+            let back = ui.add_enabled(can_go_back, Button::new(t!("disk.back"))).on_hover_text(t!("disk.back.hint"));
+            if back.clicked() {
+                *action = Some(Action::Back);
+            }
+            let forward = ui.add_enabled(!self.forward.is_empty(), Button::new(t!("disk.forward")));
+            if forward.on_hover_text(t!("disk.forward.hint")).clicked() {
+                *action = Some(Action::Forward);
+            }
             let parent = path.parent().map(Path::to_path_buf);
             if ui.add_enabled(parent.is_some(), Button::new(t!("disk.up"))).clicked() {
                 *action = Some(if self.current.is_empty() {
@@ -584,4 +647,60 @@ fn slice_at(center: Pos2, inner: f32, outer: f32, arcs: &[(f32, f32, Color32, u6
 /// Открывает проводник с выделенным файлом.
 fn select_in_explorer(path: &Path) {
     let _ = Command::new("explorer").raw_arg(format!("/select,\"{}\"", path.display())).spawn();
+}
+
+#[cfg(test)]
+mod tests {
+    use std::fs;
+
+    use super::*;
+
+    fn wait_for_scan(tab: &mut DiskTab) {
+        let started = std::time::Instant::now();
+        while tab.finish_scan() {
+            assert!(started.elapsed() < Duration::from_secs(10), "сканирование не закончилось");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    #[test]
+    fn back_and_forward_walk_the_history() {
+        let root = std::env::temp_dir().join(format!("hexcleaner-history-test-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(root.join("a/b")).unwrap();
+
+        let mut tab = DiskTab::default();
+        tab.open(root.clone());
+        wait_for_scan(&mut tab);
+        assert_eq!(tab.location(), Some(root.clone()));
+
+        tab.apply(Action::Enter("a".into()));
+        tab.apply(Action::Enter("b".into()));
+        assert_eq!(tab.location(), Some(root.join("a").join("b")));
+
+        tab.go_back();
+        assert_eq!(tab.location(), Some(root.join("a")));
+        tab.go_back();
+        assert_eq!(tab.location(), Some(root.clone()));
+        // Дальше назад некуда.
+        tab.go_back();
+        assert_eq!(tab.location(), Some(root.clone()));
+
+        tab.go_forward();
+        assert_eq!(tab.location(), Some(root.join("a")));
+        // Новый переход стирает «Вперёд».
+        tab.apply(Action::Up(1));
+        assert_eq!(tab.location(), Some(root.clone()));
+        tab.go_forward();
+        assert_eq!(tab.location(), Some(root.clone()));
+
+        // «Назад» сначала сворачивает раскрытое «Остальное».
+        tab.apply(Action::ExpandRest(vec![0]));
+        tab.go_back();
+        assert!(tab.chart_stack.is_empty());
+        assert_eq!(tab.location(), Some(root.clone()));
+        tab.go_back();
+        assert_eq!(tab.location(), Some(root.join("a")));
+        let _ = fs::remove_dir_all(&root);
+    }
 }
