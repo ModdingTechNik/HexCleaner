@@ -1,6 +1,6 @@
 [package]
 name = "HexCleaner"
-version = "0.4.1"
+version = "0.4.2"
 edition = "2024"
 description = "Очистка мусорных файлов и кэшей Windows"
 
@@ -50,9 +50,12 @@ windows = { version = "0.62", features = [
 ] }
 zip = { version = "9", default-features = false, features = ["deflate-flate2-zlib-rs"] }
 
-# Только для сборки иконки: cargo run --example make_icon
 [dev-dependencies]
+# Только для сборки иконки: cargo run --example make_icon
 resvg = "0.48"
+# Только для упаковки релиза (cargo dist): сжатие Zopfli и даты файлов в архиве.
+# В программы эти возможности не попадают.
+zip = { version = "9", default-features = false, features = ["deflate-flate2-zlib-rs", "deflate-zopfli", "chrono"] }
 
 [build-dependencies]
 embed-resource = "3"

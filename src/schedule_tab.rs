@@ -350,6 +350,9 @@ fn schedule_card(ui: &mut Ui, schedule: &Schedule, status: Option<&TaskInfo>, ta
         if schedule.close_apps {
             details.push(t!("schedule.closes_apps"));
         }
+        if schedule.no_trash {
+            details.push(t!("schedule.bypasses_trash"));
+        }
         ui.label(RichText::new(details.join(" · ")).weak()).on_hover_text(task_titles(tasks, &schedule.tasks));
 
         match status {
@@ -432,6 +435,7 @@ fn draft_form(ui: &mut Ui, draft: &mut Schedule, settings: &Settings, tasks: &[C
 
     ui.add_space(6.0);
     ui.checkbox(&mut draft.close_apps, t!("schedule.field.close_apps")).on_hover_text(t!("schedule.close_apps_hint"));
+    ui.checkbox(&mut draft.no_trash, t!("schedule.field.no_trash")).on_hover_text(t!("schedule.no_trash_hint"));
 
     let admin_checkbox = Checkbox::new(&mut draft.run_as_admin, (shield_atom(14.0), t!("schedule.run_as_admin")));
     ui.add_enabled(is_admin, admin_checkbox)

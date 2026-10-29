@@ -232,8 +232,8 @@ Exit codes (shown by Windows Task Scheduler):
 
 The "Scheduled cleanup" tab creates tasks in Windows Task Scheduler (the `\HexCleaner\` folder):
 what to clean (a preset or the checked items), when (daily, on chosen weekdays or on a day of the
-month) and at what time, whether to close programs that are in the way, and whether to run with
-administrator rights (this can be chosen only if HexCleaner itself runs as administrator).
+month) and at what time, whether to close programs that are in the way, whether to delete files
+right away, bypassing the trash (`--no-trash`), and whether to run with administrator rights (this can be chosen only if HexCleaner itself runs as administrator).
 Tasks can be enabled and disabled, edited, deleted and run right away.
 
 A task runs `HexCleaner.exe --scheduled clean --tasks … --quiet` — the same command as
@@ -276,8 +276,12 @@ WinHTTP, built into Windows (system proxy and certificates), without third-party
 
 How to publish an update:
 
-1. Bump `version` in `Cargo.toml` (e.g. `0.2.0`) and build with `cargo build --release`.
-2. Pack `HexCleaner.exe` and `HexCleanerCli.exe` into a zip (any name, e.g. `release.zip`).
+1. Bump `version` in `Cargo.toml` (e.g. `0.2.0`).
+2. Run `cargo dist`: it runs `cargo build --release`, packs `HexCleaner.exe` and
+   `HexCleanerCli.exe` into `target/release/release.zip`, checks the archive and prints its SHA-256.
+   Compression is Deflate via Zopfli (under a minute): a regular zip, but smaller than zlib at
+   its maximum. Other methods (LZMA etc.) cannot be unpacked by the updater. You can also pack it
+   by hand: a zip with these two files, Deflate or no compression, any name.
 3. Create a GitHub release with a tag equal to the version (`0.2.0` or `v0.2.0`) and attach the
    archive. The program shows the release description in the dialog as "What's new". A release
    marked "Set as a pre-release" is not offered — that's how you can publish a test build.
@@ -340,6 +344,7 @@ This rebuilds `assets/icon.ico` (all Windows sizes) and `assets/icon-256.png`
 | `src/bin/cli.rs` | The command line (`HexCleanerCli.exe`) |
 | `tests/cli.rs`, `tests/gui.rs` | Tests of `HexCleanerCli.exe` and of `HexCleaner.exe` arguments as finished programs |
 | `assets/`, `build.rs`, `examples/make_icon.rs` | The icon, file information and their build |
+| `examples/dist.rs`, `.cargo/config.toml` | Release packaging: `cargo dist` → `target/release/release.zip` |
 
 ### Adding an item
 

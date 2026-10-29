@@ -1,0 +1,4 @@
+# `cargo dist` — собрать релиз и упаковать программы в target/release/release.zip
+# (см. examples/dist.rs).
+[alias]
+dist = "run --release --example dist"

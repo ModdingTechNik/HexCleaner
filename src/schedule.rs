@@ -38,6 +38,10 @@ pub struct Schedule {
     pub minute: u8,
     /// Перед очисткой закрывать браузеры и лаунчеры, которые держат свои файлы.
     pub close_apps: bool,
+    /// Удалять сразу, мимо корзины (`--no-trash`). В заданиях, сохранённых до появления
+    /// этого поля, его нет — для них `false`.
+    #[serde(default)]
+    pub no_trash: bool,
     /// Запускать с правами администратора (без них пункты со щитом пропускаются).
     pub run_as_admin: bool,
     pub enabled: bool,
@@ -91,6 +95,7 @@ impl Schedule {
             hour: 3,
             minute: 0,
             close_apps: false,
+            no_trash: false,
             run_as_admin: false,
             enabled: true,
         }
@@ -118,11 +123,15 @@ impl Schedule {
         Ok(())
     }
 
-    /// Аргументы для `HexCleaner.exe`: `--scheduled clean --tasks a,b --quiet [--close-apps --restart-apps]`.
+    /// Аргументы для `HexCleaner.exe`:
+    /// `--scheduled clean --tasks a,b --quiet [--close-apps --restart-apps] [--no-trash]`.
     pub fn arguments(&self) -> String {
         let mut arguments = format!("{SCHEDULED_FLAG} clean --tasks {} --quiet", self.tasks.join(","));
         if self.close_apps {
             arguments.push_str(" --close-apps --restart-apps");
+        }
+        if self.no_trash {
+            arguments.push_str(" --no-trash");
         }
         arguments
     }
@@ -244,6 +253,17 @@ mod tests {
         assert_eq!(schedule.arguments(), "--scheduled clean --tasks user_temp,browsers_cache --quiet");
         schedule.close_apps = true;
         assert!(schedule.arguments().ends_with("--quiet --close-apps --restart-apps"));
+        schedule.no_trash = true;
+        assert!(schedule.arguments().ends_with("--quiet --close-apps --restart-apps --no-trash"));
+    }
+
+    /// Задания, сохранённые до появления `no_trash`, читаются — иначе пропали бы все настройки.
+    #[test]
+    fn reads_schedules_saved_without_no_trash() {
+        let mut json = serde_json::to_value(schedule()).unwrap();
+        json.as_object_mut().unwrap().remove("no_trash");
+        let schedule: Schedule = serde_json::from_value(json).unwrap();
+        assert!(!schedule.no_trash);
     }
 
     #[test]
