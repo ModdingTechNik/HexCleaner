@@ -118,18 +118,6 @@ impl TrashWorker {
     }
 }
 
-/// Текст итога восстановления: «Восстановлено файлов: 12 (3.4 МБ)», плюс пропущенные и ошибки.
-pub fn restore_summary(report: &RestoreReport) -> String {
-    let mut text = t!("trash.restored", files = report.restored, size = format_size(report.restored_bytes));
-    if report.existing > 0 {
-        text += &t!("trash.restored_existing", count = report.existing);
-    }
-    if !report.failed.is_empty() {
-        text += &t!("trash.restored_failed", count = report.failed.len());
-    }
-    text
-}
-
 /// Файлы одной папки внутри пункта (номера файлов в `TrashItem::files`).
 struct FolderGroup {
     dir: PathBuf,
@@ -165,7 +153,7 @@ impl TrashTab {
     /// Операция, запущенная с этой вкладки, закончилась.
     pub fn job_finished(&mut self, result: JobResult) {
         self.message = Some(match result {
-            JobResult::Restored(report) => (restore_summary(&report), !report.failed.is_empty()),
+            JobResult::Restored(report) => (report.summary(), !report.failed.is_empty()),
             JobResult::Deleted(Ok(())) => (t!("trash.deleted"), false),
             JobResult::Deleted(Err(error)) => (t!("trash.error.delete", error = error), true),
             JobResult::Removed(_) => return,

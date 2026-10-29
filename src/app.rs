@@ -31,7 +31,7 @@ use crate::disk_tab::DiskTab;
 use crate::progress::{CleanupProgress, TaskProgress, cleanup_progress};
 use crate::schedule_tab::ScheduleTab;
 use crate::settings_tab::{SettingsTab, egui_theme};
-use crate::trash_tab::{JobOwner, JobResult, TrashTab, TrashWorker, restore_summary};
+use crate::trash_tab::{JobOwner, JobResult, TrashTab, TrashWorker};
 use crate::update_ui::Updater;
 use crate::widgets::{dot, dot_atom, shield_atom, shield_icon, undo_atom, warning_atom};
 
@@ -788,7 +788,7 @@ impl HexCleanerApp {
             ui.add_space(ui.spacing().scroll.bar_width + 4.0);
             if let Some(report) = self.restored.get(&index) {
                 let color = if report.failed.is_empty() { result_color } else { palette.error };
-                ui.label(RichText::new(restore_summary(report)).color(color));
+                ui.label(RichText::new(report.summary()).color(color));
                 return;
             }
             self.undo_button(ui, index, task);

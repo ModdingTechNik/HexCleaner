@@ -6,6 +6,7 @@
 
 use std::collections::BTreeMap;
 use std::fs;
+use std::io;
 use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
@@ -85,20 +86,30 @@ impl Default for Settings {
 impl Settings {
     /// Загружает настройки; если файла нет или он повреждён — настройки по умолчанию.
     pub fn load() -> Self {
-        fs::read_to_string(settings_path())
+        fs::read_to_string(Self::path())
             .ok()
             .and_then(|text| serde_json::from_str(&text).ok())
             .unwrap_or_default()
     }
 
     pub fn save(&self) {
-        let path = settings_path();
+        let _ = self.try_save();
+    }
+
+    /// Как [`Settings::save`], но с ошибкой — для командной строки, где её есть кому показать.
+    pub fn try_save(&self) -> io::Result<()> {
+        let path = Self::path();
         if let Some(dir) = path.parent() {
-            let _ = fs::create_dir_all(dir);
+            fs::create_dir_all(dir)?;
         }
-        if let Ok(text) = serde_json::to_string_pretty(self) {
-            let _ = fs::write(path, text);
-        }
+        let text = serde_json::to_string_pretty(self).map_err(io::Error::other)?;
+        fs::write(path, text)
+    }
+
+    /// Файл настроек: `%APPDATA%\HexCleaner\settings.json`.
+    pub fn path() -> PathBuf {
+        let app_data = std::env::var("APPDATA").unwrap_or_else(|_| ".".to_owned());
+        PathBuf::from(app_data).join("HexCleaner").join("settings.json")
     }
 
     /// Отмечен ли пункт; `None` — пользователь его ещё не трогал.
@@ -120,9 +131,4 @@ impl Settings {
     pub fn selection(&self, tasks: &[CleanupTask]) -> Selection {
         tasks.iter().filter(|task| self.is_task_selected(task)).map(|task| task.id.to_owned()).collect()
     }
-}
-
-fn settings_path() -> PathBuf {
-    let app_data = std::env::var("APPDATA").unwrap_or_else(|_| ".".to_owned());
-    PathBuf::from(app_data).join("HexCleaner").join("settings.json")
 }

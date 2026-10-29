@@ -8,7 +8,7 @@ use hexcleaner::i18n::{self, LanguageInfo};
 use hexcleaner::settings::{Settings, Theme};
 use hexcleaner::system::drives;
 use hexcleaner::system::explorer_menu::{self, MenuState};
-use hexcleaner::trash::{Compression, TrashPolicy, TrashSettings};
+use hexcleaner::trash::{Compression, MAX_KEEP_DAYS, TrashPolicy, TrashSettings};
 use hexcleaner::{t, update};
 
 use crate::app::{open_in_explorer, trash_policy_name, window_title};
@@ -34,9 +34,8 @@ const GB: u64 = 1024 * 1024 * 1024;
 /// Самый большой лимит, который можно ввести числом, ГБ (больше — «без ограничений» на ползунке).
 const MAX_LIMIT_GB: f64 = 100_000.0;
 
-/// Срок хранения, который предлагается, когда его включают, и самый большой, дней.
+/// Срок хранения, который предлагается, когда его включают, дней.
 const DEFAULT_KEEP_DAYS: u32 = 30;
-const MAX_KEEP_DAYS: u32 = 3650;
 
 /// Страница автора на Patreon.
 const PATREON_PAGE: &str = "https://patreon.com/ModdingTechNik";

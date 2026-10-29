@@ -130,6 +130,8 @@ HexCleanerCli clean --preset safe --tasks recycle_bin --quiet
 | `analyze [what] [options]` | Analysis: how much junk is found. Deletes nothing |
 | `clean [what] [options]` | Cleanup |
 | `list` | Items (ids, safety level, whether checked in the program) and presets |
+| `config [show \| get \| set \| reset]` | Program settings (see below) |
+| `trash [list \| show \| restore \| delete \| empty]` | The HexCleaner trash (see below) |
 | `help` | Help with examples |
 
 What to process — everything listed is combined:
@@ -142,7 +144,75 @@ What to process — everything listed is combined:
 Options: `--details` (folders with junk), `--quiet` (totals only), `--lang <code>`,
 `--compress-logs` / `--no-compress-logs`, `--close-apps` (close browsers and launchers that are
 in the way before cleaning; with analyze, only list them), `--restart-apps` (start the closed
-programs again after the cleanup).
+programs again after the cleanup), `--no-trash` (delete right away, bypassing the trash — like
+cleaning with Shift in the window).
+
+A cleanup from the command line moves files to the HexCleaner trash (if it is enabled) with the
+same limit and item rules as the window. There is no one to ask what to do when the trash is
+full, so files that do not fit are deleted bypassing it — this is noted in the log. The totals
+say how much was moved and to which folder; files can be restored with the `trash` command or on
+the "Trash" tab of the window.
+
+### Trash: `trash`
+
+The same as the "Trash" tab of the window:
+
+```bash
+HexCleanerCli trash
+```
+
+```bash
+HexCleanerCli trash restore latest --tasks browsers_cache
+```
+
+* `trash` (or `trash list`) — cleanups in the trash, newest first, numbered;
+* `trash show <cleanup> [--files]` — items of a cleanup with their ids (and files);
+* `trash restore <cleanup>` — put files back. `--tasks <id,...>` — only these items,
+  `--path <path>` — only files from this folder, or this file (can be given several times).
+  Files whose place is taken by new ones stay in the trash (exit code 2);
+* `trash delete <cleanup> --yes` — delete a cleanup from the trash permanently;
+* `trash empty --yes` — delete everything in the trash. Nothing is deleted without `--yes`.
+
+`<cleanup>` is a number from the list (1 is the newest), `latest` or a name like `2026-10-29 10-56-42`
+(quotes are optional). Cleanups older than the retention period are removed, as when the window starts.
+
+### Settings: `config`
+
+The same settings as on the "Settings" tab of the window:
+
+```bash
+HexCleanerCli config
+```
+
+```bash
+HexCleanerCli config set trash.limit 10GB
+```
+
+```bash
+HexCleanerCli config set trash.policy.browsers_cache never
+```
+
+* `config` (or `config show`) — all settings: key, value, explanation and allowed values;
+* `config get <key>` — one value (handy in scripts);
+* `config set <key> <value>` or `config set <key>=<value>`;
+* `config reset <key> [<key> …]` — restore the default.
+
+| Key | Values |
+|---|---|
+| `language` | a language code (`ru`, `uk`, `en` or your own translation file) or `system` |
+| `theme` | `dark`, `light`, `system` |
+| `notify`, `flash_taskbar` | `on`, `off` |
+| `logs.compress` / `logs.compression` | `on`, `off` / `ntfs`, `zip` |
+| `trash.limit` | `5GB`, `500MB`, `1.5GB` (a number without units means GB), `off` — disabled, `unlimited` |
+| `trash.keep_days` | 1–3650 or `off` |
+| `trash.compress` / `trash.compression` | `on`, `off` / `ntfs`, `zip` |
+| `trash.path` | a folder or `default` |
+| `trash.policy.<id>` | `normal`, `always`, `never` — for items that delete files |
+| `explorer_menu` | `on`, `shift` (only with Shift), `off` — the item opens `HexCleaner.exe` from the same folder |
+| `updates.check_on_start` | `on`, `off` |
+
+The window reads settings when it starts: if it is open, restart it — otherwise it will write its
+own settings over yours the next time it saves.
 
 Items that need administrator rights are skipped without them — run the command prompt
 (or the scheduled task) as administrator to process them.

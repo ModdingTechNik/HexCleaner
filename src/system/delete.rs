@@ -7,6 +7,7 @@
 
 use std::fmt;
 use std::io;
+use std::os::windows::ffi::OsStrExt;
 use std::path::Path;
 
 use windows::Win32::Foundation::{ERROR_LOCK_VIOLATION, ERROR_SHARING_VIOLATION, HLOCAL, LocalFree, NTSTATUS};
@@ -60,7 +61,7 @@ impl fmt::Display for DeleteError {
 pub fn delete_file(path: &Path) -> Result<(), DeleteError> {
     windows::core::link!("ntdll.dll" "system" fn RtlGetLastNtStatus() -> NTSTATUS);
 
-    let result = unsafe { DeleteFileW(&HSTRING::from(path.as_os_str())) };
+    let result = unsafe { DeleteFileW(&long_path(path)) };
     result.map_err(|error| DeleteError {
         status: unsafe { RtlGetLastNtStatus() },
         error: io::Error::from_raw_os_error(error.code().0 & 0xFFFF),
@@ -72,12 +73,33 @@ pub fn delete_file(path: &Path) -> Result<(), DeleteError> {
 pub fn move_file(from: &Path, to: &Path) -> Result<(), DeleteError> {
     windows::core::link!("ntdll.dll" "system" fn RtlGetLastNtStatus() -> NTSTATUS);
 
-    let result =
-        unsafe { MoveFileExW(&HSTRING::from(from.as_os_str()), &HSTRING::from(to.as_os_str()), MOVEFILE_COPY_ALLOWED) };
+    let result = unsafe { MoveFileExW(&long_path(from), &long_path(to), MOVEFILE_COPY_ALLOWED) };
     result.map_err(|error| DeleteError {
         status: unsafe { RtlGetLastNtStatus() },
         error: io::Error::from_raw_os_error(error.code().0 & 0xFFFF),
     })
+}
+
+/// Путь для функций Windows. Длинный (от `MAX_PATH`) получает префикс `\\?\`, иначе Windows его
+/// не примет: например, `Trash\<очистка>\c\Users\…` для файла из глубокой папки кэша.
+fn long_path(path: &Path) -> HSTRING {
+    // Запас на имя файла: для папок Windows ограничивает путь ещё сильнее.
+    const SHORT_ENOUGH: usize = 248;
+    if path.as_os_str().len() < SHORT_ENOUGH {
+        return HSTRING::from(path.as_os_str());
+    }
+    // `absolute` приводит путь к виду, который понимает `\\?\`: без `/`, `.` и `..`.
+    let path = std::path::absolute(path).unwrap_or_else(|_| path.to_owned());
+    let wide: Vec<u16> = path.as_os_str().encode_wide().collect();
+    let verbatim: Vec<u16> = r"\\?\".encode_utf16().collect();
+    let prefixed: Vec<u16> = if wide.starts_with(&verbatim) {
+        wide
+    } else if let Some(unc) = wide.strip_prefix(&verbatim[..2]) {
+        r"\\?\UNC\".encode_utf16().chain(unc.iter().copied()).collect()
+    } else {
+        verbatim.into_iter().chain(wide).collect()
+    };
+    HSTRING::from_wide(&prefixed)
 }
 
 fn classify(status: NTSTATUS, error: &io::Error) -> DeleteFailure {

@@ -1,12 +1,14 @@
-//! Командная строка: `HexCleanerCli analyze | clean | list | help`.
+//! Командная строка: `HexCleanerCli analyze | clean | list | config | trash | help`.
 //! Те же команды выполняет и окно с ключом `--scheduled` (см. `hexcleaner::schedule`).
 //!
 //! Работает на том же движке, что и окно, и с теми же настройками: отмеченными пунктами,
-//! своими наборами, языком и сжатием журналов. Настройки только читаются.
+//! своими наборами, языком, сжатием журналов и корзиной. Меняет настройки только `config`.
 //! Справка с примерами — `HexCleanerCli help` (текст в файлах перевода, ключ `cli.help`).
 
 mod args;
+mod config;
 mod selection;
+mod trash;
 
 use std::io::Write;
 use std::path::Path;
@@ -48,11 +50,23 @@ pub enum UsageError {
     UnknownCommand(String),
     UnknownOption(String),
     MissingValue(String),
-    /// Параметр анализа или очистки указан у `list` или `help`.
-    OptionNotForCommand(String),
+    /// Параметр не подходит к команде: например, `--quiet` у `list`.
+    OptionNotForCommand { option: String, command: String },
     UnknownPreset(String),
     UnknownTask(String),
     NothingSelected,
+    /// Нет такой настройки (`config`).
+    UnknownSetting(String),
+    /// Настройке нельзя задать такое значение; `expected` — какие можно.
+    InvalidSetting { key: String, value: String, expected: String },
+    /// В корзине нет такой очистки (`trash`).
+    UnknownTrashRun(String),
+    /// В очистке `run` нет пункта `id`; `ids` — какие есть.
+    UnknownTrashItem { id: String, run: String, ids: String },
+    /// В очистке нет файлов, подходящих под `--tasks` и `--path`.
+    NothingToRestore(String),
+    /// Удаление из корзины навсегда без `--yes`; `command` — как повторить.
+    ConfirmationRequired(String),
 }
 
 impl UsageError {
@@ -62,10 +76,22 @@ impl UsageError {
             UsageError::UnknownCommand(value) => t!("cli.error.unknown_command", value = value, exe = exe),
             UsageError::UnknownOption(value) => t!("cli.error.unknown_option", value = value, exe = exe),
             UsageError::MissingValue(option) => t!("cli.error.missing_value", option = option),
-            UsageError::OptionNotForCommand(option) => t!("cli.error.option_not_for_command", option = option),
+            UsageError::OptionNotForCommand { option, command } => {
+                t!("cli.error.option_not_for_command", option = option, command = command, exe = exe)
+            }
             UsageError::UnknownPreset(name) => t!("cli.error.unknown_preset", name = name, exe = exe),
             UsageError::UnknownTask(id) => t!("cli.error.unknown_task", id = id, exe = exe),
             UsageError::NothingSelected => t!("cli.error.nothing_selected"),
+            UsageError::UnknownSetting(key) => t!("cli.error.unknown_setting", key = key, exe = exe),
+            UsageError::InvalidSetting { key, value, expected } => {
+                t!("cli.error.invalid_setting", key = key, value = value, expected = expected)
+            }
+            UsageError::UnknownTrashRun(name) => t!("cli.error.unknown_trash_run", name = name, exe = exe),
+            UsageError::UnknownTrashItem { id, run, ids } => t!("cli.error.unknown_trash_item", id = id, run = run, ids = ids),
+            UsageError::NothingToRestore(run) => t!("cli.error.nothing_to_restore", run = run),
+            UsageError::ConfirmationRequired(command) => {
+                t!("cli.error.confirmation_required", command = command, exe = exe)
+            }
         }
     }
 }
@@ -74,7 +100,7 @@ impl UsageError {
 /// `exe` — как запускать команды: так программа называется в справке и сообщениях об ошибках,
 /// например `HexCleanerCli` или `HexCleaner --scheduled`.
 pub fn run(args: &[String], exe: &str) -> ExitCode {
-    let settings = Settings::load();
+    let mut settings = Settings::load();
     if let Some(error) = i18n::select_language(settings.language.as_deref()) {
         eprintln!("{error}");
     }
@@ -101,6 +127,8 @@ pub fn run(args: &[String], exe: &str) -> ExitCode {
             print_list(&settings);
             ExitCode::Success
         }
+        Command::Config(command) => config::run(&command, &mut settings, exe),
+        Command::Trash(command) => trash::run(&command, &settings, exe),
         Command::Run(request) => run_cleanup(&request, &settings, exe),
     }
 }
@@ -158,13 +186,19 @@ fn run_cleanup(request: &RunRequest, settings: &Settings, exe: &str) -> ExitCode
         println!();
     }
 
+    // `--no-trash` — как Shift в окне: корзина отключается, но её папка по-прежнему не очищается.
+    let mut trash = settings.trash.clone();
+    if request.no_trash {
+        trash.limit = Some(0);
+    }
+    let trash_dir = trash.directory();
     let options = CleanupOptions {
         mode: request.mode,
         is_admin,
         log_compression: request.compress_logs.unwrap_or(settings.compress_old_logs).then_some(settings.log_compression),
         close_programs: blocking_apps.iter().flat_map(|app| app.exes.clone()).collect(),
         restart_programs: request.restart_apps,
-        trash: Some(settings.trash.clone()),
+        trash: Some(trash),
         // Спросить про лимит корзины некого: не поместившееся удаляется мимо неё.
         ask_trash_limit: false,
     };
@@ -181,8 +215,13 @@ fn run_cleanup(request: &RunRequest, settings: &Settings, exe: &str) -> ExitCode
             Ok(CleanupEvent::Progress(..)) => {}
             Ok(CleanupEvent::TaskFinished(index, result)) => progress.task_finished(index, &result),
             Ok(CleanupEvent::TaskSkipped(index)) => progress.task_skipped(index),
-            Ok(CleanupEvent::Finished { total, log_path, cancelled, .. }) => {
-                return progress.finish(&total, &log_path, cancelled);
+            Ok(CleanupEvent::Finished { total, log_path, cancelled, trash_run }) => {
+                // Со сжатием ZIP папка очистки уже упакована в `<очистка>.zip`.
+                let trash_run = trash_run.map(|id| {
+                    let archive = trash_dir.join(format!("{id}.zip"));
+                    if archive.is_file() { archive } else { trash_dir.join(id) }
+                });
+                return progress.finish(&total, &log_path, trash_run.as_deref(), cancelled, exe);
             }
             Ok(CleanupEvent::Failed(message)) => {
                 eprintln!("{message}");
@@ -274,7 +313,8 @@ impl Progress {
         }
     }
 
-    fn finish(&self, total: &TaskReport, log_path: &Path, cancelled: bool) -> ExitCode {
+    /// `trash_run` — папка этой очистки в корзине, если в неё что-то перенесено.
+    fn finish(&self, total: &TaskReport, log_path: &Path, trash_run: Option<&Path>, cancelled: bool, exe: &str) -> ExitCode {
         if !self.quiet {
             println!();
         }
@@ -291,6 +331,13 @@ impl Progress {
         }
         if total.freed_memory > 0 {
             println!("{}", t!("cli.total_memory", size = format_size(total.freed_memory)));
+        }
+        if let Some(run) = trash_run
+            && total.trashed_files > 0
+        {
+            let size = format_size(total.trashed_bytes);
+            let path = run.display();
+            println!("{}", t!("cli.total_trash", files = total.trashed_files, size = size, path = path, exe = exe));
         }
         println!("{}", t!("cli.log", path = log_path.display()));
 

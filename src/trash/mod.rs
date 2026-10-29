@@ -27,11 +27,15 @@ use zip::{CompressionMethod, ZipArchive, ZipWriter};
 pub use remove::{MANUAL_TASK_ID, RemoveReport, remove_path};
 pub use session::{LimitRequest, Stored, TrashDecision, TrashSession};
 
+use crate::cleaner::format_size;
 use crate::system::delete;
 use crate::t;
 
 /// Лимит корзины по умолчанию.
 pub const DEFAULT_LIMIT: u64 = 5 * 1024 * 1024 * 1024;
+
+/// Самый долгий срок хранения очисток, дней.
+pub const MAX_KEEP_DAYS: u32 = 3650;
 
 /// Что делать с файлами пункта при очистке.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -163,6 +167,20 @@ pub struct RestoreReport {
     pub existing: u64,
     /// Файлы, которые не удалось восстановить, и причины.
     pub failed: Vec<(PathBuf, String)>,
+}
+
+impl RestoreReport {
+    /// «Восстановлено файлов: 12 (3.4 МБ)», плюс пропущенные и ошибки.
+    pub fn summary(&self) -> String {
+        let mut text = t!("trash.restored", files = self.restored, size = format_size(self.restored_bytes));
+        if self.existing > 0 {
+            text += &t!("trash.restored_existing", count = self.existing);
+        }
+        if !self.failed.is_empty() {
+            text += &t!("trash.restored_failed", count = self.failed.len());
+        }
+        text
+    }
 }
 
 /// Папка корзины.
