@@ -387,8 +387,9 @@ Your items come after the built-in ones and work with presets, the trash, schedu
 the command line (`HexCleanerCli list` marks them with the file name). Changes to the files are
 picked up with the "Reload" button; file errors are shown there and in `list`.
 
-Samples — the Gradle cache and the Claude Desktop cache — are in the `examples` subfolder and stay
-off until you copy a file into the items folder itself. Unlike built-in items, your items cannot
+Ready-made samples — the Gradle cache and the Claude Desktop cache — are created only by the
+"Create examples" button, in the `examples` subfolder (they are also in [`tasks/examples`](tasks/examples)
+on GitHub). They stay off until you copy a file into the items folder itself, and deleted ones do not come back. Unlike built-in items, your items cannot
 close programs or stop services: files in use are simply not deleted.
 
 ## Icon

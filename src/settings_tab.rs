@@ -62,6 +62,8 @@ pub struct SettingsTab {
     pub custom_task_errors: Vec<String>,
     /// Нажата кнопка «Перечитать»: окно перечитает свои пункты.
     pub reload_tasks: bool,
+    /// Не удалось создать примеры своих пунктов.
+    examples_error: Option<String>,
 }
 
 impl SettingsTab {
@@ -76,6 +78,7 @@ impl SettingsTab {
             menu_error: None,
             custom_task_errors: Vec::new(),
             reload_tasks: false,
+            examples_error: None,
         };
         tab.refresh_languages();
         tab.refresh_themes();
@@ -167,8 +170,20 @@ impl SettingsTab {
         ui.horizontal(|ui| {
             let folder = ui.button(t!("settings.custom_tasks.folder")).on_hover_text(t!("settings.custom_tasks.folder.hint"));
             if folder.clicked() {
-                custom_tasks::export_examples();
-                open_in_explorer(&custom_tasks::tasks_directory());
+                let dir = custom_tasks::tasks_directory();
+                let _ = std::fs::create_dir_all(&dir);
+                open_in_explorer(&dir);
+            }
+            let examples =
+                ui.button(t!("settings.custom_tasks.examples")).on_hover_text(t!("settings.custom_tasks.examples.hint"));
+            if examples.clicked() {
+                match custom_tasks::create_examples() {
+                    Ok(dir) => {
+                        self.examples_error = None;
+                        open_in_explorer(&dir);
+                    }
+                    Err(error) => self.examples_error = Some(t!("settings.custom_tasks.examples_failed", error = error)),
+                }
             }
             let reload = ui
                 .add_enabled(!busy, egui::Button::new(t!("settings.custom_tasks.reload")))
@@ -178,7 +193,7 @@ impl SettingsTab {
             }
         });
         ui.label(RichText::new(t!("settings.custom_tasks.hint")).weak());
-        for error in &self.custom_task_errors {
+        for error in self.examples_error.iter().chain(&self.custom_task_errors) {
             ui.label(RichText::new(error).color(ui.visuals().error_fg_color));
         }
     }

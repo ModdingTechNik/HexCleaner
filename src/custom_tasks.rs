@@ -29,7 +29,9 @@
 //! должен быть полным, а его неизменная часть (до первой маски) — не защищённой папкой
 //! (не корень диска, не профиль, не `C:\Windows` …). Пункт с ошибкой пропускается целиком,
 //! а ошибка показывается в настройках окна и в `HexCleanerCli list`.
-//! Образцы лежат в подпапке `examples`: её файлы не загружаются, пока их не скопируют в `tasks`.
+//! Образцы создаются только по просьбе пользователя (кнопка «Создать примеры») в подпапке
+//! `examples`: её файлы не загружаются, пока их не скопируют в `tasks`. В отличие от языков
+//! и тем, программе они не нужны, поэтому сами не появляются и после удаления не возвращаются.
 
 use std::collections::BTreeSet;
 use std::fs;
@@ -100,18 +102,18 @@ pub fn tasks_directory() -> PathBuf {
     PathBuf::from(app_data).join("HexCleaner").join("tasks")
 }
 
-/// Записывает образцы в `tasks\examples`. Существующие файлы не перезаписываются.
-pub fn export_examples() {
+/// Записывает образцы в `tasks\examples` и возвращает эту папку. Существующие файлы
+/// не перезаписываются: пользователь мог их отредактировать.
+pub fn create_examples() -> std::io::Result<PathBuf> {
     let dir = tasks_directory().join("examples");
-    if fs::create_dir_all(&dir).is_err() {
-        return;
-    }
+    fs::create_dir_all(&dir)?;
     for (name, json) in EXAMPLES {
         let path = dir.join(name);
         if !path.exists() {
-            let _ = fs::write(path, json);
+            fs::write(path, json)?;
         }
     }
+    Ok(dir)
 }
 
 /// Свои пункты из папки своих пунктов (в порядке имён файлов) и ошибки в файлах.
