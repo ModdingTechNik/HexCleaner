@@ -186,7 +186,7 @@ impl SettingsTab {
                 }
             }
             let reload = ui
-                .add_enabled(!busy, egui::Button::new(t!("settings.custom_tasks.reload")))
+                .add_enabled(!busy, egui::Button::new(t!("settings.reload")))
                 .on_hover_text(t!("settings.custom_tasks.reload.hint"));
             if reload.clicked() {
                 self.reload_tasks = true;
@@ -297,9 +297,12 @@ impl SettingsTab {
                 themes::export_built_in_themes();
                 open_in_explorer(&themes::themes_directory());
             }
+            if ui.button(t!("settings.reload")).on_hover_text(t!("settings.themes.reload.hint")).clicked() {
+                chosen = Some(settings.theme.clone());
+            }
         });
 
-        // Выбор той же темы тоже применяет её заново — так видны правки в её файле.
+        // Выбор той же темы и «Перечитать» применяют её заново — так видны правки в её файле.
         let Some(id) = chosen else { return };
         self.refresh_themes();
         self.theme_error = theme::apply(ui.ctx(), &id).or(self.theme_error.take());
@@ -315,7 +318,7 @@ impl SettingsTab {
             .find(|language| language.code == current)
             .map_or(current.clone(), |language| language.name.clone());
 
-        let mut chosen = None;
+        let (mut chosen, mut reload) = (None, false);
         ui.horizontal(|ui| {
             let combo = ComboBox::from_id_salt("language").selected_text(current_name).width(180.0).show_ui(ui, |ui| {
                 for language in &self.languages {
@@ -335,21 +338,35 @@ impl SettingsTab {
                 i18n::export_built_in_languages();
                 open_in_explorer(&i18n::languages_directory());
             }
+            reload = ui.button(t!("settings.reload")).on_hover_text(t!("settings.languages.reload.hint")).clicked();
         });
 
+        if reload {
+            // Тот же язык заново — так видны правки в его файле. Выбор «как в Windows» не меняется.
+            self.refresh_languages();
+            match i18n::set_language(&current) {
+                Ok(()) => self.language_changed(ui.ctx(), is_admin),
+                Err(error) => self.error = Some(t!("status.language_failed", code = current, error = error)),
+            }
+            return;
+        }
         let Some(code) = chosen else { return };
         match i18n::set_language(&code) {
             Ok(()) => {
                 settings.language = Some(code);
                 settings.save();
-                ui.ctx().send_viewport_cmd(egui::ViewportCommand::Title(window_title(is_admin)));
-                // Текст пункта в меню проводника — на новом языке.
-                if self.menu.installed {
-                    let exe = self.menu.exe.clone().or_else(|| self.exe.clone());
-                    self.update_menu(true, self.menu.shift_only, exe);
-                }
+                self.language_changed(ui.ctx(), is_admin);
             }
             Err(error) => self.error = Some(t!("status.language_failed", code = code, error = error)),
+        }
+    }
+
+    /// После смены языка: заголовок окна и текст пункта в меню проводника — на новом языке.
+    fn language_changed(&mut self, ctx: &egui::Context, is_admin: bool) {
+        ctx.send_viewport_cmd(egui::ViewportCommand::Title(window_title(is_admin)));
+        if self.menu.installed {
+            let exe = self.menu.exe.clone().or_else(|| self.exe.clone());
+            self.update_menu(true, self.menu.shift_only, exe);
         }
     }
 }

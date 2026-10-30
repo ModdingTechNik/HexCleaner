@@ -299,7 +299,8 @@ At startup the program puts them into `%APPDATA%\HexCleaner\languages`
 1. Copy `en.json`, for example, to `de.json` — the file name becomes the language code.
 2. Change `name` (how the language is called in the list) and translate the texts in `strings`.
    Leave the placeholders in curly braces (`{files}`, `{size}` …) as they are.
-3. Open the language list — the new language appears there.
+3. Open the language list — the new language appears there. Changes to the current language
+   file are applied by the "Reload" button next to the list.
 
 Untranslated keys fall back to English, so a translation can be done gradually.
 A `ru.json` or `en.json` file in this folder extends the built-in language: it only needs the
@@ -343,8 +344,8 @@ folder — the file name becomes the theme code:
 | `success`, `found`, `failure` | Cleanup and analysis totals, cleanup errors, safety level dots, the "Delete permanently" button |
 | `chart` (a list), `chart_rest` | Chart slices on the "Disk space" tab and the "Other" slice |
 
-A new theme appears in the list as soon as you open it; changes to a file show up when you
-choose the theme again. A `dark.json` or `light.json` in that folder extends the built-in theme:
+A new theme appears in the list as soon as you open it; changes to a file are applied by the
+"Reload" button next to the list. A `dark.json` or `light.json` in that folder extends the built-in theme:
 it only needs the colors you want to change. "System" switches the built-in dark and
 light themes following Windows. Colors that were not understood and file errors are shown in
 the settings, and a theme can also be chosen from the command line: `HexCleanerCli config set theme ocean`.
