@@ -8,9 +8,23 @@ use crate::settings::Settings;
 use super::UsageError;
 use super::args::TaskChoice;
 
-/// Индексы выбранных пунктов в каталоге — в том порядке, в котором пункты выполняются.
-pub fn resolve(choice: &TaskChoice, tasks: &[CleanupTask], settings: &Settings) -> Result<Vec<usize>, UsageError> {
+/// Что выбрано.
+#[derive(Debug, Default, PartialEq)]
+pub struct Resolved {
+    /// Индексы выбранных пунктов в каталоге — в том порядке, в котором пункты выполняются.
+    /// Может быть пустым: о том, что выбирать нечего, сообщает вызывающий.
+    pub indices: Vec<usize>,
+    /// Пункты из `--tasks` и `--exclude`, которых нет в каталоге: опечатка или удалённый
+    /// свой пункт, который ещё остался в задании планировщика. Они пропускаются.
+    pub missing: Vec<String>,
+}
+
+/// Пункты по наборам, `--tasks`, `--exclude` и `--selected`. Неизвестный набор — ошибка,
+/// неизвестный пункт — нет (см. [`Resolved::missing`]): иначе удаление одного своего пункта
+/// остановило бы все задания планировщика, где он был.
+pub fn resolve(choice: &TaskChoice, tasks: &[CleanupTask], settings: &Settings) -> Result<Resolved, UsageError> {
     let mut selection = Selection::new();
+    let mut missing = Vec::new();
 
     if choice.selected || choice.is_empty() {
         selection.extend(settings.selection(tasks));
@@ -19,17 +33,26 @@ pub fn resolve(choice: &TaskChoice, tasks: &[CleanupTask], settings: &Settings) 
         selection.extend(preset(name, tasks, settings)?);
     }
     for id in &choice.tasks {
-        selection.insert(task_id(id, tasks)?);
+        match task_id(id, tasks) {
+            Some(id) => selection.insert(id),
+            None => {
+                missing.push(id.clone());
+                false
+            }
+        };
     }
     for id in &choice.exclude {
-        selection.remove(&task_id(id, tasks)?);
+        match task_id(id, tasks) {
+            Some(id) => selection.remove(&id),
+            None => {
+                missing.push(id.clone());
+                false
+            }
+        };
     }
 
-    let indices: Vec<usize> = (0..tasks.len()).filter(|&index| selection.contains(tasks[index].id)).collect();
-    if indices.is_empty() {
-        return Err(UsageError::NothingSelected);
-    }
-    Ok(indices)
+    let indices = (0..tasks.len()).filter(|&index| selection.contains(tasks[index].id)).collect();
+    Ok(Resolved { indices, missing })
 }
 
 /// Встроенный набор (`safe`, `recommended`, `full`) или свой — по названию.
@@ -47,13 +70,9 @@ fn preset(name: &str, tasks: &[CleanupTask], settings: &Settings) -> Result<Sele
         .ok_or_else(|| UsageError::UnknownPreset(name.to_owned()))
 }
 
-/// Проверяет, что такой пункт есть в каталоге (регистр не важен), и возвращает его точный id.
-fn task_id(id: &str, tasks: &[CleanupTask]) -> Result<String, UsageError> {
-    tasks
-        .iter()
-        .find(|task| task.id.eq_ignore_ascii_case(id))
-        .map(|task| task.id.to_owned())
-        .ok_or_else(|| UsageError::UnknownTask(id.to_owned()))
+/// Точный id пункта из каталога (регистр не важен); `None` — такого пункта нет.
+fn task_id(id: &str, tasks: &[CleanupTask]) -> Option<String> {
+    tasks.iter().find(|task| task.id.eq_ignore_ascii_case(id)).map(|task| task.id.to_owned())
 }
 
 #[cfg(test)]
@@ -61,8 +80,8 @@ mod tests {
     use super::*;
     use crate::catalog::{Safety, all_tasks};
 
-    fn ids(indices: &[usize], tasks: &[CleanupTask]) -> Vec<&'static str> {
-        indices.iter().map(|&index| tasks[index].id).collect()
+    fn ids(resolved: &Resolved, tasks: &[CleanupTask]) -> Vec<&'static str> {
+        resolved.indices.iter().map(|&index| tasks[index].id).collect()
     }
 
     fn choice(presets: &[&str], tasks: &[&str], exclude: &[&str]) -> TaskChoice {
@@ -111,13 +130,31 @@ mod tests {
     }
 
     #[test]
-    fn reports_unknown_names_and_empty_selection() {
+    fn unknown_preset_is_an_error_unknown_tasks_are_skipped() {
         let tasks = all_tasks();
         let settings = Settings::default();
-        let error = |choice| resolve(&choice, &tasks, &settings).unwrap_err();
 
-        assert_eq!(error(choice(&["nightly"], &[], &[])), UsageError::UnknownPreset("nightly".into()));
-        assert_eq!(error(choice(&[], &["cookies"], &[])), UsageError::UnknownTask("cookies".into()));
-        assert_eq!(error(choice(&[], &["user_temp"], &["user_temp"])), UsageError::NothingSelected);
+        let error = resolve(&choice(&["nightly"], &[], &[]), &tasks, &settings).unwrap_err();
+        assert_eq!(error, UsageError::UnknownPreset("nightly".into()));
+
+        // Удалённый свой пункт в задании: остальные пункты выполняются.
+        let resolved = resolve(&choice(&[], &["user_temp", "deleted_task"], &["gone"]), &tasks, &settings).unwrap();
+        assert_eq!(ids(&resolved, &tasks), ["user_temp"]);
+        assert_eq!(resolved.missing, ["deleted_task", "gone"]);
+
+        let resolved = resolve(&choice(&[], &["user_temp"], &["user_temp"]), &tasks, &settings).unwrap();
+        assert!(resolved.indices.is_empty() && resolved.missing.is_empty());
+    }
+
+    /// Свой набор, в котором остался удалённый пункт, работает без него.
+    #[test]
+    fn user_preset_with_deleted_task_still_works() {
+        let tasks = all_tasks();
+        let mut settings = Settings::default();
+        presets::save(&mut settings.presets, "Старый", ["recycle_bin".to_owned(), "deleted_task".to_owned()].into());
+
+        let resolved = resolve(&choice(&["Старый"], &[], &[]), &tasks, &settings).unwrap();
+        assert_eq!(ids(&resolved, &tasks), ["recycle_bin"]);
+        assert!(resolved.missing.is_empty());
     }
 }

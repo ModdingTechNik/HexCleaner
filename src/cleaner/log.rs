@@ -6,7 +6,8 @@
 //! (по одному архиву на журнал, в 10–20 раз меньше места) или сжатием NTFS всей папки
 //! (журналы остаются обычными файлами).
 
-use std::fs::{self, File};
+use std::fs::{self, File, OpenOptions};
+use std::os::windows::fs::OpenOptionsExt;
 use std::io::{self, BufWriter, Write};
 use std::path::{Path, PathBuf};
 
@@ -50,8 +51,8 @@ impl CleanupLog {
             Mode::Clean => ("cleanup", t!("log.title_clean", version = version)),
             Mode::Analyze => ("analysis", t!("log.title_analysis", version = version)),
         };
-        let path = dir.join(format!("{prefix}_{}.log", now.format("%Y-%m-%d_%H-%M-%S")));
-        let mut log = Self { writer: BufWriter::new(File::create(&path)?), path, mode };
+        let (path, file) = new_log_file(dir, &format!("{prefix}_{}", now.format("%Y-%m-%d_%H-%M-%S")))?;
+        let mut log = Self { writer: BufWriter::new(file), path, mode };
 
         log.line(&title);
         log.line(&t!("log.started", time = now_text()));
@@ -135,6 +136,33 @@ fn now_text() -> String {
 
 /// Сжимает журналы прошлых очисток: `cleanup_….log` → `cleanup_….zip`.
 /// Ошибка сжатия не мешает очистке — журнал просто останется несжатым.
+/// Новый файл журнала `<name>.log`. Если имя занято — очистка в ту же секунду, например два
+/// задания планировщика на одно время, — добавляется номер: `<name>_2.log`. Занятым считается
+/// и имя уже упакованного журнала (`<name>.zip`). Файл создаётся, только если его ещё нет,
+/// поэтому две одновременные очистки не запишут журналы в один файл.
+fn new_log_file(dir: &Path, name: &str) -> io::Result<(PathBuf, File)> {
+    let mut number = 1;
+    loop {
+        let numbered = if number == 1 { name.to_owned() } else { format!("{name}_{number}") };
+        if !dir.join(format!("{numbered}.zip")).exists() {
+            let path = dir.join(format!("{numbered}.log"));
+            match File::create_new(&path) {
+                Ok(file) => return Ok((path, file)),
+                Err(error) if error.kind() != io::ErrorKind::AlreadyExists => return Err(error),
+                Err(_) => {}
+            }
+        }
+        number += 1;
+    }
+}
+
+/// Журнал ещё пишется — его держит идущая сейчас очистка (например, другое задание
+/// планировщика на то же время). Такой журнал не упаковываем: он ещё не закончен.
+fn is_in_use(path: &Path) -> bool {
+    // Без общего доступа файл не откроется, пока его держит кто-то ещё.
+    OpenOptions::new().read(true).share_mode(0).open(path).is_err()
+}
+
 fn compress_previous_logs(dir: &Path) {
     let Ok(entries) = fs::read_dir(dir) else { return };
     let logs = entries
@@ -142,7 +170,7 @@ fn compress_previous_logs(dir: &Path) {
         .map(|entry| entry.path())
         .filter(|path| path.extension().is_some_and(|extension| extension.eq_ignore_ascii_case("log")));
 
-    for log_path in logs {
+    for log_path in logs.filter(|path| !is_in_use(path)) {
         let zip_path = log_path.with_extension("zip");
         match compress_file(&log_path, &zip_path) {
             Ok(()) => {
@@ -222,6 +250,41 @@ mod tests {
         assert_eq!(unpacked, text);
 
         drop(new_log);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// Журнал идущей очистки не упаковывается, пока она его пишет.
+    #[test]
+    fn log_in_use_is_not_compressed() {
+        let dir = std::env::temp_dir().join(format!("hexcleaner_log_in_use_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let running = dir.join("cleanup_2026-10-30_03-00-00.log");
+        let writer = File::create(&running).unwrap();
+
+        compress_previous_logs(&dir);
+        assert!(running.exists() && !running.with_extension("zip").exists());
+
+        drop(writer);
+        compress_previous_logs(&dir);
+        assert!(!running.exists() && running.with_extension("zip").exists());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// Две очистки в одну секунду не пишут в один журнал, даже если первый уже упакован в zip.
+    #[test]
+    fn logs_of_the_same_second_get_numbers() {
+        let dir = std::env::temp_dir().join(format!("hexcleaner_log_names_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("cleanup_2026-10-30_03-00-00.zip"), "").unwrap();
+
+        let (first, _first_file) = new_log_file(&dir, "cleanup_2026-10-30_03-00-00").unwrap();
+        let (second, _second_file) = new_log_file(&dir, "cleanup_2026-10-30_03-00-00").unwrap();
+        assert!(first.ends_with("cleanup_2026-10-30_03-00-00_2.log"), "{}", first.display());
+        assert!(second.ends_with("cleanup_2026-10-30_03-00-00_3.log"), "{}", second.display());
+
+        drop((_first_file, _second_file));
         let _ = fs::remove_dir_all(&dir);
     }
 }

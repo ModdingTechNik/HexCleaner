@@ -92,6 +92,8 @@ pub struct CleanupOptions {
     /// Спрашивать интерфейс, если файл не помещается в лимит корзины. Без этого
     /// (командная строка) такие файлы удаляются мимо корзины.
     pub ask_trash_limit: bool,
+    /// Строки в начало журнала — например, какие пункты задания не нашлись и пропущены.
+    pub notes: Vec<String>,
 }
 
 /// Запущенная очистка.
@@ -167,6 +169,9 @@ fn run_cleanup(
         }
     };
     log.line(&if is_admin { t!("log.admin_yes") } else { t!("log.admin_no") });
+    for note in &options.notes {
+        log.line(note);
+    }
 
     let closed_programs = if options.mode == Mode::Clean && !options.close_programs.is_empty() {
         let _ = events.send(CleanupEvent::ClosingPrograms);

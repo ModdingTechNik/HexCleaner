@@ -393,6 +393,12 @@ Ready-made samples — the Gradle cache and the Claude Desktop cache — are cre
 on GitHub). They stay off until you copy a file into the items folder itself, and deleted ones do not come back. Unlike built-in items, your items cannot
 close programs or stop services: files in use are simply not deleted.
 
+An item with `"admin": true` behaves like built-in items with the shield: without administrator
+rights it is skipped — in the window, on the command line and in scheduled cleanup (exit code 2).
+If an item's file is deleted, the item disappears from the list, and in your presets, checkmarks
+and scheduled tasks it is simply skipped: the other items run, the log gets a line about the skip,
+the exit code is 2, and the task card shows a warning.
+
 ## Icon
 
 The sources are `assets/icon.svg` (for 32 px and larger) and `assets/icon-small.svg`

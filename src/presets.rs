@@ -70,11 +70,15 @@ pub fn built_in(tasks: &[CleanupTask], max_safety: Safety) -> Selection {
 }
 
 /// Набор, совпадающий с `selection`. Встроенные наборы проверяются первыми.
+/// Пункты своего набора, которых больше нет в каталоге (удалённые свои пункты), не учитываются.
 pub fn find_active(tasks: &[CleanupTask], presets: &[UserPreset], selection: &Selection) -> ActivePreset {
     if let Some(level) = Safety::ALL.into_iter().find(|&level| built_in(tasks, level) == *selection) {
         return ActivePreset::BuiltIn(level);
     }
-    match presets.iter().find(|preset| preset.tasks == *selection) {
+    let existing = |preset: &UserPreset| -> Selection {
+        preset.tasks.iter().filter(|id| tasks.iter().any(|task| task.id == id.as_str())).cloned().collect()
+    };
+    match presets.iter().find(|preset| existing(preset) == *selection) {
         Some(preset) => ActivePreset::User(preset.name.clone()),
         None => ActivePreset::Custom,
     }
@@ -147,5 +151,13 @@ mod tests {
 
         delete(&mut presets, "Браузеры");
         assert!(presets.is_empty());
+    }
+
+    /// Свой пункт из набора удалили — набор всё равно узнаётся по оставшимся пунктам.
+    #[test]
+    fn preset_with_deleted_task_is_still_recognized() {
+        let tasks = all_tasks();
+        let presets = vec![UserPreset { name: "Старый".into(), tasks: selection(&["user_temp", "deleted_task"]) }];
+        assert_eq!(find_active(&tasks, &presets, &selection(&["user_temp"])), ActivePreset::User("Старый".into()));
     }
 }

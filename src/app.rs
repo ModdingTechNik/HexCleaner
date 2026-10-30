@@ -305,6 +305,7 @@ impl HexCleanerApp {
             restart_programs,
             trash: Some(trash),
             ask_trash_limit: true,
+            notes: Vec::new(),
         };
         self.job = Some(CleanupJob::start(Arc::clone(&self.tasks), selected, options));
     }

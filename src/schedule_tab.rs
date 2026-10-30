@@ -354,6 +354,11 @@ fn schedule_card(ui: &mut Ui, schedule: &Schedule, status: Option<&TaskInfo>, ta
             details.push(t!("schedule.bypasses_trash"));
         }
         ui.label(RichText::new(details.join(" · ")).weak()).on_hover_text(task_titles(tasks, &schedule.tasks));
+        let missing: Vec<&str> =
+            schedule.tasks.iter().map(String::as_str).filter(|id| !tasks.iter().any(|task| task.id == *id)).collect();
+        if !missing.is_empty() {
+            ui.label(RichText::new(t!("schedule.missing_tasks", ids = missing.join(", "))).color(ui.visuals().warn_fg_color));
+        }
 
         match status {
             Some(task) => {

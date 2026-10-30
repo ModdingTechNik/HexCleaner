@@ -54,7 +54,6 @@ pub enum UsageError {
     /// Параметр не подходит к команде: например, `--quiet` у `list`.
     OptionNotForCommand { option: String, command: String },
     UnknownPreset(String),
-    UnknownTask(String),
     NothingSelected,
     /// Нет такой настройки (`config`).
     UnknownSetting(String),
@@ -81,7 +80,6 @@ impl UsageError {
                 t!("cli.error.option_not_for_command", option = option, command = command, exe = exe)
             }
             UsageError::UnknownPreset(name) => t!("cli.error.unknown_preset", name = name, exe = exe),
-            UsageError::UnknownTask(id) => t!("cli.error.unknown_task", id = id, exe = exe),
             UsageError::NothingSelected => t!("cli.error.nothing_selected"),
             UsageError::UnknownSetting(key) => t!("cli.error.unknown_setting", key = key, exe = exe),
             UsageError::InvalidSetting { key, value, expected } => {
@@ -169,13 +167,22 @@ fn print_list(settings: &Settings) {
 /// Анализ или очистка с выводом хода работы.
 fn run_cleanup(request: &RunRequest, settings: &Settings, exe: &str) -> ExitCode {
     let tasks = Arc::new(catalog::all_tasks());
-    let selected = match selection::resolve(&request.choice, &tasks, settings) {
-        Ok(selected) => selected,
+    let resolved = match selection::resolve(&request.choice, &tasks, settings) {
+        Ok(resolved) => resolved,
         Err(error) => {
             eprintln!("{}", error.message(exe));
             return ExitCode::BadArguments;
         }
     };
+    // Пропущенные пункты видны и при --quiet: в задании планировщика это единственный вывод.
+    for id in &resolved.missing {
+        eprintln!("{}", t!("cli.warning.unknown_task", id = id, exe = exe));
+    }
+    let selected = resolved.indices;
+    if selected.is_empty() {
+        eprintln!("{}", UsageError::NothingSelected.message(exe));
+        return ExitCode::BadArguments;
+    }
 
     let is_admin = admin::is_elevated();
     if !request.quiet {
@@ -207,6 +214,7 @@ fn run_cleanup(request: &RunRequest, settings: &Settings, exe: &str) -> ExitCode
         trash: Some(trash),
         // Спросить про лимит корзины некого: не поместившееся удаляется мимо неё.
         ask_trash_limit: false,
+        notes: resolved.missing.iter().map(|id| t!("log.unknown_task", id = id)).collect(),
     };
 
     console::catch_ctrl_c();
@@ -227,7 +235,12 @@ fn run_cleanup(request: &RunRequest, settings: &Settings, exe: &str) -> ExitCode
                     let archive = trash_dir.join(format!("{id}.zip"));
                     if archive.is_file() { archive } else { trash_dir.join(id) }
                 });
-                return progress.finish(&total, &log_path, trash_run.as_deref(), cancelled, exe);
+                let code = progress.finish(&total, &log_path, trash_run.as_deref(), cancelled, exe);
+                // Пропущенные пункты — повод заглянуть в журнал, как и неудалённые файлы.
+                return match code {
+                    ExitCode::Success if !resolved.missing.is_empty() => ExitCode::PartiallyDone,
+                    code => code,
+                };
             }
             Ok(CleanupEvent::Failed(message)) => {
                 eprintln!("{message}");
