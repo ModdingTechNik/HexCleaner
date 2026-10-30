@@ -114,3 +114,38 @@ fn trash_lists_and_requires_confirmation_to_delete() {
 
     let _ = std::fs::remove_dir_all(&root);
 }
+
+/// Копия, которую запускает `--elevate`: вывод уходит в файлы папки `--relay`, а не в консоль,
+/// код возврата — обычный. Сам запрос прав (UAC) в тестах не проверить.
+#[test]
+fn relay_copy_writes_output_to_files() {
+    let root = std::env::temp_dir().join(format!("hexcleaner_cli_relay_{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    let (relay, temp) = (root.join("relay"), root.join("temp"));
+    std::fs::create_dir_all(&relay).unwrap();
+    std::fs::create_dir_all(&temp).unwrap();
+    let run = |args: &[&str]| {
+        Command::new(env!("CARGO_BIN_EXE_HexCleanerCli"))
+            .args(args)
+            .args(["--lang", "en", "--relay"])
+            .arg(&relay)
+            .env("APPDATA", root.join("roaming"))
+            .env("LOCALAPPDATA", root.join("local"))
+            .env("TEMP", &temp)
+            .env("TMP", &temp)
+            .output()
+            .expect("HexCleanerCli должен запускаться")
+    };
+    let read = |name: &str| std::fs::read_to_string(relay.join(name)).unwrap_or_default();
+
+    let output = run(&["analyze", "--tasks", "user_temp"]);
+    assert_eq!(output.status.code(), Some(0), "{}", read("stderr.txt"));
+    assert!(output.stdout.is_empty() && output.stderr.is_empty(), "вывод ушёл в консоль");
+    assert!(read("stdout.txt").contains("Total:"), "{}", read("stdout.txt"));
+
+    let output = run(&["analyze", "--tasks", "no_such_task_for_tests"]);
+    assert_eq!(output.status.code(), Some(1));
+    assert!(read("stderr.txt").contains("no_such_task_for_tests"), "{}", read("stderr.txt"));
+
+    let _ = std::fs::remove_dir_all(&root);
+}

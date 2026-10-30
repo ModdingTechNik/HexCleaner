@@ -145,7 +145,7 @@ Options: `--details` (folders with junk), `--quiet` (totals only), `--lang <code
 `--compress-logs` / `--no-compress-logs`, `--close-apps` (close browsers and launchers that are
 in the way before cleaning; with analyze, only list them), `--restart-apps` (start the closed
 programs again after the cleanup), `--no-trash` (delete right away, bypassing the trash — like
-cleaning with Shift in the window).
+cleaning with Shift in the window), `--elevate` (run with administrator rights, see below).
 
 A cleanup from the command line moves files to the HexCleaner trash (if it is enabled) with the
 same limit and item rules as the window. There is no one to ask what to do when the trash is
@@ -214,8 +214,14 @@ HexCleanerCli config set trash.policy.browsers_cache never
 The window reads settings when it starts: if it is open, restart it — otherwise it will write its
 own settings over yours the next time it saves.
 
-Items that need administrator rights are skipped without them — run the command prompt
-(or the scheduled task) as administrator to process them.
+Items that need administrator rights are skipped without them. To process them from a regular
+command prompt, add `--elevate`: Windows asks for permission (UAC), the command runs with
+administrator rights, and its output, Ctrl+C and exit code stay in the same window. Windows does
+not let a running program raise its rights, so `--elevate` starts a windowless copy of the program
+and shows its output. With rights already present the flag changes nothing; declining the UAC
+prompt runs nothing (exit code 3). Scheduled tasks do not need `--elevate` — they have the
+"With administrator rights" checkbox. On Windows 11 with sudo enabled in "inline" mode the
+same can be done with `sudo HexCleanerCli clean …`.
 Ctrl+C stops gracefully: services are started again and the log is completed.
 
 Exit codes (shown by Windows Task Scheduler):

@@ -3,11 +3,13 @@
 //! защита стандартных потоков от подмены при закрытии программ
 //! и вывод оконной программы, запущенной с параметрами.
 
+use std::fs::File;
+use std::os::windows::io::IntoRawHandle;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use windows::Win32::Foundation::{FALSE, TRUE};
+use windows::Win32::Foundation::{FALSE, HANDLE, TRUE};
 use windows::Win32::System::Console::{
-    ATTACH_PARENT_PROCESS, AttachConsole, CTRL_BREAK_EVENT, CTRL_C_EVENT, GetConsoleWindow, GetStdHandle,
+    ATTACH_PARENT_PROCESS, AttachConsole, CTRL_BREAK_EVENT, CTRL_C_EVENT, FreeConsole, GetConsoleWindow, GetStdHandle,
     STD_ERROR_HANDLE, STD_HANDLE, STD_INPUT_HANDLE, STD_OUTPUT_HANDLE, SetConsoleCtrlHandler, SetStdHandle,
 };
 use windows::Win32::UI::WindowsAndMessaging::{MB_ICONERROR, MB_ICONINFORMATION, MB_OK, MessageBoxW};
@@ -48,6 +50,17 @@ pub fn preserve_std_handles<T>(action: impl FnOnce() -> T) -> T {
         }
     }
     result
+}
+
+/// Направляет вывод программы в файлы и отключает её от консоли. Так работает копия программы,
+/// запущенная с правами администратора по `--elevate`: её вывод показывает исходная программа.
+/// Файлы остаются открытыми до конца работы программы.
+pub fn redirect_output(stdout: File, stderr: File) {
+    unsafe {
+        let _ = SetStdHandle(STD_OUTPUT_HANDLE, HANDLE(stdout.into_raw_handle()));
+        let _ = SetStdHandle(STD_ERROR_HANDLE, HANDLE(stderr.into_raw_handle()));
+        let _ = FreeConsole();
+    }
 }
 
 /// Подключает оконную программу к консоли, из которой её запустили, чтобы её вывод было видно.

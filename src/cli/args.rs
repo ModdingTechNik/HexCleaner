@@ -47,6 +47,11 @@ pub struct RunRequest {
     pub restart_apps: bool,
     /// `--no-trash`: удалять сразу, мимо корзины.
     pub no_trash: bool,
+    /// `--elevate`: выполнить с правами администратора (запрос UAC), вывод — здесь же.
+    pub elevate: bool,
+    /// Служебный `--relay <папка>`: эта программа — копия, запущенная по `--elevate`;
+    /// вывод — в файлы этой папки (см. `cli::elevate`). В справке его нет.
+    pub relay: Option<PathBuf>,
 }
 
 /// Какие пункты обработать. Наборы, пункты и `--selected` складываются,
@@ -94,6 +99,8 @@ pub fn parse(args: &[String]) -> Result<Arguments, UsageError> {
         close_apps: false,
         restart_apps: false,
         no_trash: false,
+        elevate: false,
+        relay: None,
     };
     let mut language = None;
     // Первый параметр анализа или очистки — чтобы сообщить об ошибке, если он указан у list или help.
@@ -125,6 +132,8 @@ pub fn parse(args: &[String]) -> Result<Arguments, UsageError> {
             "--close-apps" => request.close_apps = true,
             "--restart-apps" => request.restart_apps = true,
             "--no-trash" => request.no_trash = true,
+            "--elevate" => request.elevate = true,
+            "--relay" => request.relay = Some(PathBuf::from(value()?)),
             _ => return Err(UsageError::UnknownOption(arg.clone())),
         }
         first_run_option.get_or_insert_with(|| name.to_owned());
@@ -293,8 +302,11 @@ mod tests {
 
         let request = run_request("clean --preset safe --close-apps --restart-apps");
         assert!(request.close_apps && request.restart_apps);
-        assert!(!request.no_trash);
+        assert!(!request.no_trash && !request.elevate && request.relay.is_none());
         assert!(run_request("clean --no-trash").no_trash);
+        let request = run_request(r"analyze --elevate --relay C:\Temp\x");
+        assert!(request.elevate);
+        assert_eq!(request.relay, Some(PathBuf::from(r"C:\Temp\x")));
     }
 
     fn config(line: &str) -> ConfigCommand {

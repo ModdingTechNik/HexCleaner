@@ -1,4 +1,5 @@
 //! Командная строка: `HexCleanerCli analyze | clean | list | config | trash | help`.
+//! С `--elevate` анализ и очистка перезапускаются с правами администратора (см. [`elevate`]).
 //! Те же команды выполняет и окно с ключом `--scheduled` (см. `hexcleaner::schedule`).
 //!
 //! Работает на том же движке, что и окно, и с теми же настройками: отмеченными пунктами,
@@ -7,6 +8,7 @@
 
 mod args;
 mod config;
+mod elevate;
 mod selection;
 mod trash;
 
@@ -97,7 +99,8 @@ impl UsageError {
 
 /// Выполняет команду (`args` — параметры без имени программы) и возвращает код возврата.
 /// `exe` — как запускать команды: так программа называется в справке и сообщениях об ошибках,
-/// например `HexCleanerCli` или `HexCleaner --scheduled`.
+/// например `HexCleanerCli` или `HexCleaner --scheduled`. Параметры после имени программы
+/// повторяются и при перезапуске с правами администратора (`--elevate`).
 pub fn run(args: &[String], exe: &str) -> ExitCode {
     let mut settings = Settings::load();
     if let Some(error) = i18n::select_language(settings.language.as_deref()) {
@@ -128,7 +131,19 @@ pub fn run(args: &[String], exe: &str) -> ExitCode {
         }
         Command::Config(command) => config::run(&command, &mut settings, exe),
         Command::Trash(command) => trash::run(&command, &settings, exe),
-        Command::Run(request) => run_cleanup(&request, &settings, exe),
+        // Права уже есть — `--elevate` ничего не меняет.
+        Command::Run(request) if request.elevate && request.relay.is_none() && !admin::is_elevated() => {
+            elevate::run(args, exe, request.quiet)
+        }
+        Command::Run(request) => {
+            if let Some(dir) = &request.relay
+                && let Err(error) = elevate::start_relay(dir)
+            {
+                eprintln!("{}", t!("cli.elevate.failed", error = error));
+                return ExitCode::Failed;
+            }
+            run_cleanup(&request, &settings, exe)
+        }
     }
 }
 
@@ -247,7 +262,7 @@ fn run_cleanup(request: &RunRequest, settings: &Settings, exe: &str) -> ExitCode
                 return ExitCode::Failed;
             }
             Err(RecvTimeoutError::Timeout) => {
-                if console::ctrl_c_pressed() && !stopping {
+                if elevate::stop_requested() && !stopping {
                     stopping = true;
                     eprintln!("\n{}", t!("cli.stopping"));
                     job.cancel();
