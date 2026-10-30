@@ -4,7 +4,10 @@
 //! и список простых действий ([`Action`]). Заголовок и описание пункта берутся из файлов
 //! перевода по ключам `task.<id>.title` и `task.<id>.description`. Движок очистки (`cleaner`) и интерфейс
 //! (`app`) ничего не знают о конкретных путях — чтобы добавить новый пункт,
-//! достаточно дописать его в [`all_tasks`].
+//! достаточно дописать его в [`built_in_tasks`].
+//!
+//! Свои пункты пользователь описывает в JSON-файлах (см. [`crate::custom_tasks`]):
+//! они идут в списке после встроенных, тексты у них — из самих файлов.
 //!
 //! Пути записываются шаблонами:
 //! * `%NAME%` — переменная окружения (`%LOCALAPPDATA%`, `%WINDIR%` ...)
@@ -19,7 +22,8 @@
 
 use std::time::Duration;
 
-use crate::i18n;
+use crate::custom_tasks;
+use crate::i18n::{self, LocalizedText};
 use crate::t;
 
 /// Временные файлы моложе этого возраста не удаляются:
@@ -129,17 +133,37 @@ pub struct CleanupTask {
     pub requires_admin: bool,
     /// Службы, которые останавливаются на время очистки и затем запускаются снова.
     pub services_to_stop: &'static [&'static str],
+    /// Свой пункт из JSON-файла; `None` — встроенный.
+    pub custom: Option<CustomText>,
     pub actions: Vec<Action>,
+}
+
+/// Тексты своего пункта и файл, из которого он взят.
+pub struct CustomText {
+    pub title: LocalizedText,
+    pub description: Option<LocalizedText>,
+    /// Имя файла в папке своих пунктов, например `gradle.json`.
+    pub file: String,
 }
 
 impl CleanupTask {
     pub fn title(&self) -> String {
-        i18n::text(&format!("task.{}.title", self.id))
+        match &self.custom {
+            Some(custom) => custom.title.resolve().unwrap_or_else(|| self.id.to_owned()),
+            None => i18n::text(&format!("task.{}.title", self.id)),
+        }
     }
 
     /// Подробности, которые показываются во всплывающей подсказке.
     pub fn description(&self) -> String {
-        i18n::text(&format!("task.{}.description", self.id))
+        match &self.custom {
+            Some(custom) => {
+                let description = custom.description.as_ref().and_then(LocalizedText::resolve);
+                let source = t!("custom_task.source", file = custom.file);
+                description.map_or(source.clone(), |description| format!("{description}\n\n{source}"))
+            }
+            None => i18n::text(&format!("task.{}.description", self.id)),
+        }
     }
 
     /// Удаляет ли пункт файлы. Только такие можно переносить в корзину: журналы событий,
@@ -167,8 +191,23 @@ fn delete_files(pattern: impl Into<String>) -> Action {
     Action::DeleteFiles { pattern: pattern.into() }
 }
 
-/// Все пункты очистки в том порядке, в котором они показываются и выполняются.
+/// Все пункты очистки — встроенные, затем свои — в том порядке, в котором они показываются
+/// и выполняются. Свои пункты с ошибками пропускаются; узнать о них — [`load_tasks`].
 pub fn all_tasks() -> Vec<CleanupTask> {
+    load_tasks().0
+}
+
+/// Все пункты очистки и ошибки в файлах своих пунктов.
+pub fn load_tasks() -> (Vec<CleanupTask>, Vec<String>) {
+    let mut tasks = built_in_tasks();
+    let ids: Vec<&str> = tasks.iter().map(|task| task.id).collect();
+    let (custom, errors) = custom_tasks::load(&ids);
+    tasks.extend(custom);
+    (tasks, errors)
+}
+
+/// Встроенные пункты очистки.
+pub fn built_in_tasks() -> Vec<CleanupTask> {
     vec![
         CleanupTask {
             id: "memory",
@@ -176,6 +215,7 @@ pub fn all_tasks() -> Vec<CleanupTask> {
             programs_to_close: &[],
             requires_admin: true,
             services_to_stop: &[],
+            custom: None,
             actions: vec![Action::TrimProcessMemory],
         },
         CleanupTask {
@@ -184,6 +224,7 @@ pub fn all_tasks() -> Vec<CleanupTask> {
             programs_to_close: GAME_LAUNCHERS,
             requires_admin: false,
             services_to_stop: &[],
+            custom: None,
             actions: games_and_gpu_cache_actions(),
         },
         CleanupTask {
@@ -192,6 +233,7 @@ pub fn all_tasks() -> Vec<CleanupTask> {
             programs_to_close: &[],
             requires_admin: true,
             services_to_stop: &[],
+            custom: None,
             actions: vec![
                 clear_dir(r"%PROGRAMDATA%\NVIDIA Corporation\Installer2"),
                 clear_dir(r"%PROGRAMDATA%\NVIDIA Corporation\Downloader"),
@@ -204,6 +246,7 @@ pub fn all_tasks() -> Vec<CleanupTask> {
             programs_to_close: BROWSERS,
             requires_admin: false,
             services_to_stop: &[],
+            custom: None,
             actions: browser_cache_actions(),
         },
         CleanupTask {
@@ -212,6 +255,7 @@ pub fn all_tasks() -> Vec<CleanupTask> {
             programs_to_close: &[],
             requires_admin: false,
             services_to_stop: &[],
+            custom: None,
             actions: vec![
                 delete_files(r"%LOCALAPPDATA%\Microsoft\Windows\Explorer\thumbcache_*.db"),
                 delete_files(r"%LOCALAPPDATA%\Microsoft\Windows\Explorer\iconcache_*.db"),
@@ -224,6 +268,7 @@ pub fn all_tasks() -> Vec<CleanupTask> {
             programs_to_close: &[],
             requires_admin: true,
             services_to_stop: &[],
+            custom: None,
             actions: vec![
                 clear_dir(r"%PROGRAMDATA%\Microsoft\Windows Defender\Scans\History\Results"),
                 clear_dir(r"%PROGRAMDATA%\Microsoft\Windows Defender\Scans\History\Service\DetectionHistory"),
@@ -237,6 +282,7 @@ pub fn all_tasks() -> Vec<CleanupTask> {
             programs_to_close: &[],
             requires_admin: true,
             services_to_stop: &[],
+            custom: None,
             actions: vec![
                 clear_dir(r"%WINDIR%\Installer\$PatchCache$"),
                 delete_dir(r"%SYSTEMDRIVE%\$Windows.~WS"),
@@ -250,6 +296,7 @@ pub fn all_tasks() -> Vec<CleanupTask> {
             programs_to_close: &[],
             requires_admin: true,
             services_to_stop: &["wuauserv", "bits", "dosvc"],
+            custom: None,
             actions: vec![
                 clear_dir(r"%WINDIR%\SoftwareDistribution\Download"),
                 clear_dir(
@@ -263,6 +310,7 @@ pub fn all_tasks() -> Vec<CleanupTask> {
             programs_to_close: &[],
             requires_admin: true,
             services_to_stop: &[],
+            custom: None,
             actions: system_log_actions(),
         },
         CleanupTask {
@@ -271,6 +319,7 @@ pub fn all_tasks() -> Vec<CleanupTask> {
             programs_to_close: &[],
             requires_admin: true,
             services_to_stop: &[],
+            custom: None,
             actions: vec![
                 delete_dir(r"%SYSTEMDRIVE%\NVIDIA"),
                 delete_dir(r"%SYSTEMDRIVE%\AMD"),
@@ -283,6 +332,7 @@ pub fn all_tasks() -> Vec<CleanupTask> {
             programs_to_close: &[],
             requires_admin: false,
             services_to_stop: &[],
+            custom: None,
             actions: vec![clear_dir_older_than(r"%TEMP%", TEMP_MIN_AGE)],
         },
         CleanupTask {
@@ -291,6 +341,7 @@ pub fn all_tasks() -> Vec<CleanupTask> {
             programs_to_close: &[],
             requires_admin: true,
             services_to_stop: &[],
+            custom: None,
             actions: vec![
                 clear_dir_older_than(r"%WINDIR%\Temp", TEMP_MIN_AGE),
                 clear_dir_older_than(r"%WINDIR%\SystemTemp", TEMP_MIN_AGE),
@@ -304,6 +355,7 @@ pub fn all_tasks() -> Vec<CleanupTask> {
             programs_to_close: &[],
             requires_admin: true,
             services_to_stop: &[],
+            custom: None,
             actions: vec![
                 clear_dir(r"%PROGRAMDATA%\Microsoft\Diagnosis\ETLLogs"),
                 clear_dir(r"%WINDIR%\System32\SleepStudy"),
@@ -316,6 +368,7 @@ pub fn all_tasks() -> Vec<CleanupTask> {
             programs_to_close: &[],
             requires_admin: false,
             services_to_stop: &[],
+            custom: None,
             actions: vec![
                 clear_dir(r"%LOCALAPPDATA%\Microsoft\Windows\WER"),
                 clear_dir(r"%LOCALAPPDATA%\CrashDumps"),
@@ -327,6 +380,7 @@ pub fn all_tasks() -> Vec<CleanupTask> {
             programs_to_close: &[],
             requires_admin: true,
             services_to_stop: &[],
+            custom: None,
             actions: vec![
                 clear_dir(r"%PROGRAMDATA%\Microsoft\Windows\WER\ReportArchive"),
                 clear_dir(r"%PROGRAMDATA%\Microsoft\Windows\WER\ReportQueue"),
@@ -343,6 +397,7 @@ pub fn all_tasks() -> Vec<CleanupTask> {
             programs_to_close: &[],
             requires_admin: false,
             services_to_stop: &[],
+            custom: None,
             actions: vec![Action::EmptyRecycleBin],
         },
     ]

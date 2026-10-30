@@ -1,0 +1,22 @@
+{
+  "tasks": [
+    {
+      "id": "claude_desktop_cache",
+      "title": { "ru": "Кэш Claude Desktop", "uk": "Кеш Claude Desktop", "en": "Claude Desktop cache" },
+      "description": {
+        "ru": "Кэш страниц, скриптов и видеокарты приложения Claude для Windows — обычно сотни мегабайт. Переписки, настройки и вход не затрагиваются. Перед очисткой закройте Claude. То же делает и сам Claude: Help → Troubleshooting → Clear Cache and Restart.",
+        "uk": "Кеш сторінок, скриптів і відеокарти застосунку Claude для Windows — зазвичай сотні мегабайтів. Листування, налаштування й вхід не зачіпаються. Перед очищенням закрийте Claude. Те саме робить і сам Claude: Help → Troubleshooting → Clear Cache and Restart.",
+        "en": "Page, script and GPU cache of the Claude app for Windows, usually hundreds of megabytes. Conversations, settings and sign-in are not affected. Close Claude before cleaning. Claude itself does the same: Help → Troubleshooting → Clear Cache and Restart."
+      },
+      "safety": "moderate",
+      "actions": [
+        { "clear": "%APPDATA%\\Claude\\Cache" },
+        { "clear": "%APPDATA%\\Claude\\Code Cache" },
+        { "clear": "%APPDATA%\\Claude\\GPUCache" },
+        { "clear": "%LOCALAPPDATA%\\Claude-Data\\*\\Cache" },
+        { "clear": "%LOCALAPPDATA%\\Claude-Data\\*\\Code Cache" },
+        { "clear": "%LOCALAPPDATA%\\Claude-Data\\*\\GPUCache" }
+      ]
+    }
+  ]
+}

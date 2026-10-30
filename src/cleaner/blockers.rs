@@ -176,6 +176,7 @@ mod tests {
             programs_to_close: &[Program { exe: "powershell.exe", helpers: &[] }],
             requires_admin: false,
             services_to_stop: &[],
+            custom: None,
             actions: vec![Action::ClearDirectory { pattern: root.display().to_string(), min_age: None }],
         };
 

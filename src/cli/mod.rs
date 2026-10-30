@@ -17,6 +17,7 @@ use std::sync::mpsc::RecvTimeoutError;
 use std::time::Duration;
 
 use crate::catalog::{self, CleanupTask, Safety};
+use crate::custom_tasks;
 use crate::cleaner::{
     BlockingApp, CleanupEvent, CleanupJob, CleanupOptions, Mode, TaskReport, TaskResult, find_blocking_apps, format_size,
 };
@@ -135,7 +136,7 @@ pub fn run(args: &[String], exe: &str) -> ExitCode {
 
 /// Пункты с идентификаторами и наборы — всё, что можно указать в `--tasks` и `--preset`.
 fn print_list(settings: &Settings) {
-    let tasks = catalog::all_tasks();
+    let (tasks, errors) = catalog::load_tasks();
     let id_width = tasks.iter().map(|task| task.id.len()).max().unwrap_or(0);
     let level_width = Safety::ALL.iter().map(|level| level.name().chars().count()).max().unwrap_or(0);
 
@@ -143,11 +144,16 @@ fn print_list(settings: &Settings) {
     for task in &tasks {
         let mark = if settings.is_task_selected(task) { "[x]" } else { "[ ]" };
         let admin = if task.requires_admin { t!("cli.list.admin") } else { String::new() };
+        let custom = task.custom.as_ref().map(|custom| t!("cli.list.custom", file = custom.file)).unwrap_or_default();
         let level = task.safety.name();
-        println!("  {mark} {:<id_width$}  {level:<level_width$}  {}{admin}", task.id, task.title());
+        println!("  {mark} {:<id_width$}  {level:<level_width$}  {}{admin}{custom}", task.id, task.title());
     }
     println!();
     println!("{}", t!("cli.list.selected_hint"));
+    println!("{}", t!("cli.list.custom_hint", folder = custom_tasks::tasks_directory().display()));
+    for error in &errors {
+        eprintln!("{error}");
+    }
 
     println!();
     println!("{}", t!("cli.list.presets"));

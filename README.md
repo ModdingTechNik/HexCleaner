@@ -349,6 +349,48 @@ it only needs the colors you want to change. "System" switches the built-in dark
 light themes following Windows. Colors that were not understood and file errors are shown in
 the settings, and a theme can also be chosen from the command line: `HexCleanerCli config set theme ocean`.
 
+## Your own cleanup items
+
+Caches that not everyone needs (Gradle, npm, your own programs) can be added as JSON files
+in `%APPDATA%\HexCleaner\tasks` (the "Items folder…" button on the "Settings" tab).
+One file can hold several items:
+
+```json
+{
+  "tasks": [
+    {
+      "id": "gradle_caches",
+      "title": { "ru": "Кэш Gradle", "uk": "Кеш Gradle", "en": "Gradle cache" },
+      "description": "Скачанные зависимости и кэш сборки. Gradle скачает нужное заново.",
+      "safety": "moderate",
+      "actions": [
+        { "clear": "%USERPROFILE%\\.gradle\\caches" },
+        { "delete_files": "%USERPROFILE%\\.gradle\\daemon\\*\\*.log" }
+      ]
+    }
+  ]
+}
+```
+
+| Field | Meaning |
+|---|---|
+| `id` | Lowercase Latin letters, digits, `_` and `-`. Checkmarks are saved by it and it is used in `--tasks`. Must not match another item |
+| `title`, `description` | Name and tooltip — a string or per language code, as in themes |
+| `safety` | `safe`, `moderate` (default) or `caution` — the dot color and the built-in presets |
+| `admin` | `true` if the folder cannot be cleaned without administrator rights |
+| `actions` | `clear` — empty a folder (with `older_than_hours`, only things older than that), `delete_folder` — delete a folder entirely, `delete_files` — delete files by mask |
+
+Paths are the same templates as in the built-in catalog: `%VARIABLES%` and `*`. They are checked
+more strictly: a path must be a full path, and its part before the first `*` must not be a protected
+folder (a drive root, the profile and its Documents, `C:\Windows`…), otherwise the item is skipped.
+Your items come after the built-in ones and work with presets, the trash, scheduled cleanup and
+the command line (`HexCleanerCli list` marks them with the file name). Changes to the files are
+picked up with the "Reload" button; file errors are shown there and in `list`.
+
+Samples — the Gradle cache and the Claude Desktop cache — are in the `examples` subfolder and stay
+off until you copy a file into the items folder itself. Unlike built-in items, your items cannot
+close programs or stop services: files in use are simply not deleted.
+
 ## Icon
 
 The sources are `assets/icon.svg` (for 32 px and larger) and `assets/icon-small.svg`
@@ -370,6 +412,7 @@ This rebuilds `assets/icon.ico` (all Windows sizes) and `assets/icon-256.png`
 | `src/presets.rs` | Presets: built-in by safety level and saved by the user |
 | `src/i18n.rs`, `languages/` | Localization: loading translations, the `t!` macro, built-in dictionaries |
 | `src/themes.rs`, `src/theme.rs`, `themes/` | Themes: theme files and list; applying colors to the window; built-in themes |
+| `src/custom_tasks.rs`, `tasks/examples/` | Your own cleanup items: reading and checking JSON files; samples |
 | `src/cleaner/` | The cleanup engine: thread, events for the interface, file deletion, log, statistics |
 | `src/system/` | Windows API wrappers (rights, services, event logs, memory, Restart Manager, HTTPS, SHA-256). All `unsafe` code lives here |
 | `src/settings.rs` | Saving the selected items, presets and settings |

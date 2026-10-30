@@ -29,7 +29,7 @@ use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
 
-use crate::i18n;
+use crate::i18n::{self, LocalizedText};
 use crate::t;
 
 /// Тема «как в Windows»: тёмная или светлая встроенная, смотря по настройке системы.
@@ -51,33 +51,11 @@ pub enum Base {
     Light,
 }
 
-/// Название темы: одно на все языки или по кодам языков.
-#[derive(Clone, Debug, PartialEq, Deserialize)]
-#[serde(untagged)]
-pub enum ThemeName {
-    Text(String),
-    ByLanguage(BTreeMap<String, String>),
-}
-
-impl ThemeName {
-    /// Название на языке программы, иначе на английском, иначе любое.
-    fn resolve(&self) -> Option<String> {
-        match self {
-            ThemeName::Text(name) => Some(name.clone()),
-            ThemeName::ByLanguage(names) => names
-                .get(&i18n::current_language())
-                .or_else(|| names.get("en"))
-                .or_else(|| names.values().next())
-                .cloned(),
-        }
-    }
-}
-
 /// Содержимое файла темы. Все поля можно не указывать.
 #[derive(Clone, Debug, Default, PartialEq, Deserialize)]
 #[serde(default)]
 pub struct ThemeFile {
-    pub name: Option<ThemeName>,
+    pub name: Option<LocalizedText>,
     pub base: Option<Base>,
     /// Цвета по названиям: `"background": "#1B1B1B"`.
     pub colors: BTreeMap<String, String>,
@@ -157,7 +135,7 @@ pub fn available_themes() -> (Vec<ThemeInfo>, Vec<String>) {
 }
 
 fn available_in(dir: &Path) -> (Vec<ThemeInfo>, Vec<String>) {
-    let mut themes: BTreeMap<String, Option<ThemeName>> =
+    let mut themes: BTreeMap<String, Option<LocalizedText>> =
         BUILT_IN.iter().map(|(id, _)| (id.to_string(), built_in(id).and_then(|file| file.name))).collect();
     let mut broken = Vec::new();
 
@@ -267,12 +245,4 @@ mod tests {
         let _ = fs::remove_dir_all(&dir);
     }
 
-    #[test]
-    fn names_follow_the_language() {
-        let names = ThemeName::ByLanguage(BTreeMap::from([("en".into(), "Dark".into()), ("xx".into(), "Xx".into())]));
-        // Названия на языке программы нет — берётся английское.
-        assert_eq!(names.resolve().as_deref(), Some("Dark"));
-        let only_other = ThemeName::ByLanguage(BTreeMap::from([("xx".into(), "Xx".into())]));
-        assert_eq!(only_other.resolve().as_deref(), Some("Xx"));
-    }
 }

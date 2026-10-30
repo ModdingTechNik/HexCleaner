@@ -499,13 +499,13 @@ mod tests {
     fn rejects_invalid_values() {
         let mut settings = Settings::default();
         for (key, value) in [
-            ("theme", "pink"),
+            ("theme", "no-such-theme-for-tests"),
             ("notify", "maybe"),
             ("trash.limit", "5 parsecs"),
             ("trash.keep_days", "0"),
             ("trash.keep_days", "99999"),
             ("trash.path", " "),
-            ("language", "xx"),
+            ("language", "no-such-language-for-tests"),
             ("explorer_menu", "sometimes"),
         ] {
             assert!(

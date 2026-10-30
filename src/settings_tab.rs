@@ -1,9 +1,11 @@
-//! Вкладка «Настройки»: язык и тема, уведомления, журналы, корзина, пункт в меню проводника, обновления.
+//! Вкладка «Настройки»: язык и тема, уведомления, журналы, корзина, свои пункты очистки,
+//! пункт в меню проводника, обновления.
 
 use std::path::{Path, PathBuf};
 
 use eframe::egui::{self, Checkbox, ComboBox, DragValue, Grid, RichText, ScrollArea, Slider, Ui};
 use hexcleaner::catalog::CleanupTask;
+use hexcleaner::custom_tasks;
 use hexcleaner::i18n::{self, LanguageInfo};
 use hexcleaner::settings::Settings;
 use hexcleaner::system::drives;
@@ -56,6 +58,10 @@ pub struct SettingsTab {
     /// Пункт в меню проводника по последнему чтению реестра.
     menu: MenuState,
     menu_error: Option<String>,
+    /// Ошибки в файлах своих пунктов очистки — их заполняет окно, когда читает пункты.
+    pub custom_task_errors: Vec<String>,
+    /// Нажата кнопка «Перечитать»: окно перечитает свои пункты.
+    pub reload_tasks: bool,
 }
 
 impl SettingsTab {
@@ -68,6 +74,8 @@ impl SettingsTab {
             exe: std::env::current_exe().ok(),
             menu: explorer_menu::state(),
             menu_error: None,
+            custom_task_errors: Vec::new(),
+            reload_tasks: false,
         };
         tab.refresh_languages();
         tab.refresh_themes();
@@ -136,6 +144,9 @@ impl SettingsTab {
                 }
             });
 
+            section(ui, t!("settings.custom_tasks"));
+            self.custom_tasks_section(ui, tasks, busy);
+
             section(ui, t!("settings.explorer"));
             self.explorer_section(ui);
 
@@ -147,6 +158,29 @@ impl SettingsTab {
                 ui.hyperlink_to(t!("settings.patreon"), PATREON_PAGE);
             });
         });
+    }
+
+    /// Свои пункты очистки: папка с их файлами, перечитывание и ошибки в файлах.
+    fn custom_tasks_section(&mut self, ui: &mut Ui, tasks: &[CleanupTask], busy: bool) {
+        let count = tasks.iter().filter(|task| task.custom.is_some()).count();
+        ui.label(t!("settings.custom_tasks.count", count = count));
+        ui.horizontal(|ui| {
+            let folder = ui.button(t!("settings.custom_tasks.folder")).on_hover_text(t!("settings.custom_tasks.folder.hint"));
+            if folder.clicked() {
+                custom_tasks::export_examples();
+                open_in_explorer(&custom_tasks::tasks_directory());
+            }
+            let reload = ui
+                .add_enabled(!busy, egui::Button::new(t!("settings.custom_tasks.reload")))
+                .on_hover_text(t!("settings.custom_tasks.reload.hint"));
+            if reload.clicked() {
+                self.reload_tasks = true;
+            }
+        });
+        ui.label(RichText::new(t!("settings.custom_tasks.hint")).weak());
+        for error in &self.custom_task_errors {
+            ui.label(RichText::new(error).color(ui.visuals().error_fg_color));
+        }
     }
 
     /// Пункт «Анализ папки в HexCleaner» в контекстном меню проводника.

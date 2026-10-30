@@ -14,7 +14,7 @@
 //! * Файл с именем встроенного языка (например, `ru.json`) дополняет и переопределяет его тексты.
 //! * Если в переводе нет какого-то ключа, берётся английский текст.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::fmt::{self, Display};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -54,6 +54,28 @@ struct LanguageFile {
     name: String,
     /// Тексты по ключам.
     strings: HashMap<String, String>,
+}
+
+/// Текст из файла темы или своего пункта очистки: один на все языки или по кодам языков.
+#[derive(Clone, Debug, PartialEq, Deserialize)]
+#[serde(untagged)]
+pub enum LocalizedText {
+    Text(String),
+    ByLanguage(BTreeMap<String, String>),
+}
+
+impl LocalizedText {
+    /// Текст на языке программы, иначе на английском, иначе любой.
+    pub fn resolve(&self) -> Option<String> {
+        match self {
+            LocalizedText::Text(text) => Some(text.clone()),
+            LocalizedText::ByLanguage(texts) => texts
+                .get(&current_language())
+                .or_else(|| texts.get(FALLBACK_LANGUAGE))
+                .or_else(|| texts.values().next())
+                .cloned(),
+        }
+    }
 }
 
 /// Язык в списке выбора.
@@ -275,7 +297,7 @@ mod tests {
             let key = code[start + 4..].split('"').next().unwrap();
             used.insert(key.to_owned());
         }
-        for task in crate::catalog::all_tasks() {
+        for task in crate::catalog::built_in_tasks() {
             used.insert(format!("task.{}.title", task.id));
             used.insert(format!("task.{}.description", task.id));
         }
@@ -293,6 +315,16 @@ mod tests {
             }
         }
         files
+    }
+
+    #[test]
+    fn localized_text_follows_the_language() {
+        let texts = LocalizedText::ByLanguage(BTreeMap::from([("en".into(), "Dark".into()), ("xx".into(), "Xx".into())]));
+        // Текста на языке программы нет — берётся английский.
+        assert_eq!(texts.resolve().as_deref(), Some("Dark"));
+        let only_other = LocalizedText::ByLanguage(BTreeMap::from([("xx".into(), "Xx".into())]));
+        assert_eq!(only_other.resolve().as_deref(), Some("Xx"));
+        assert_eq!(LocalizedText::Text("Один".into()).resolve().as_deref(), Some("Один"));
     }
 
     #[test]

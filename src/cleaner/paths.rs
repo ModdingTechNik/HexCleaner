@@ -46,7 +46,7 @@ fn expand_variables(pattern: &str) -> Option<String> {
 }
 
 /// Значение переменной окружения или одной из специальных переменных.
-fn variable_value(name: &str) -> Option<String> {
+pub(crate) fn variable_value(name: &str) -> Option<String> {
     let value = match name {
         "STEAM" => steam_directory()?,
         _ => env::var(name).ok()?,

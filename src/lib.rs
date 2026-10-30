@@ -2,6 +2,7 @@
 //! и командной строки (`HexCleanerCli.exe`, `src/bin/cli.rs`).
 //!
 //! * [`catalog`] — пункты очистки и их пути;
+//! * [`custom_tasks`] — свои пункты очистки в JSON-файлах;
 //! * [`cleaner`] — движок: анализ и очистка в отдельном потоке, журнал, статистика;
 //! * [`disk_usage`] — место на диске: дерево папок с размерами;
 //! * [`presets`] — наборы галочек;
@@ -17,6 +18,7 @@
 pub mod catalog;
 pub mod cleaner;
 pub mod cli;
+pub mod custom_tasks;
 pub mod disk_usage;
 pub mod i18n;
 pub mod presets;

@@ -1,0 +1,31 @@
+{
+  "tasks": [
+    {
+      "id": "gradle_caches",
+      "title": { "ru": "Кэш Gradle", "uk": "Кеш Gradle", "en": "Gradle cache" },
+      "description": {
+        "ru": "Скачанные зависимости и кэш сборки Gradle (папка .gradle\\caches в профиле) — часто несколько гигабайт. Gradle скачает нужное заново, первая сборка будет дольше. Перед очисткой закройте Android Studio и IntelliJ IDEA и остановите демоны: gradle --stop.",
+        "uk": "Завантажені залежності й кеш збирання Gradle (папка .gradle\\caches у профілі) — часто кілька гігабайтів. Gradle завантажить потрібне знову, перше збирання буде довшим. Перед очищенням закрийте Android Studio та IntelliJ IDEA й зупиніть демони: gradle --stop.",
+        "en": "Downloaded dependencies and the Gradle build cache (the .gradle\\caches folder in your profile), often several gigabytes. Gradle downloads what it needs again, so the first build takes longer. Close Android Studio and IntelliJ IDEA and stop the daemons first: gradle --stop."
+      },
+      "safety": "moderate",
+      "actions": [
+        { "clear": "%USERPROFILE%\\.gradle\\caches" },
+        { "delete_files": "%USERPROFILE%\\.gradle\\daemon\\*\\*.log" }
+      ]
+    },
+    {
+      "id": "gradle_wrapper_dists",
+      "title": { "ru": "Версии Gradle, скачанные gradlew", "uk": "Версії Gradle, завантажені gradlew", "en": "Gradle versions downloaded by gradlew" },
+      "description": {
+        "ru": "Дистрибутивы Gradle, которые обёртка gradlew скачала для разных проектов (.gradle\\wrapper\\dists). Нужная версия скачается заново при сборке проекта.",
+        "uk": "Дистрибутиви Gradle, які обгортка gradlew завантажила для різних проєктів (.gradle\\wrapper\\dists). Потрібна версія завантажиться знову під час збирання проєкту.",
+        "en": "Gradle distributions that the gradlew wrapper downloaded for different projects (.gradle\\wrapper\\dists). The required version is downloaded again when the project is built."
+      },
+      "safety": "moderate",
+      "actions": [
+        { "clear": "%USERPROFILE%\\.gradle\\wrapper\\dists" }
+      ]
+    }
+  ]
+}

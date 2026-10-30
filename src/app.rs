@@ -166,7 +166,7 @@ impl HexCleanerApp {
         let theme_error = theme::apply(&cc.egui_ctx, &settings.theme);
         use_system_font(&cc.egui_ctx);
 
-        let tasks = catalog::all_tasks();
+        let (tasks, task_errors) = catalog::load_tasks();
         let task_count = tasks.len();
         let mut app = Self {
             task_states: vec![TaskState::Idle; task_count],
@@ -203,7 +203,9 @@ impl HexCleanerApp {
             let trash = Trash::new(app.settings.trash.directory());
             thread::spawn(move || trash.remove_expired(days, chrono::Local::now()));
         }
-        if let Some(error) = language_error.or(theme_error) {
+        let tasks_error = (!task_errors.is_empty()).then(|| t!("status.custom_tasks_failed", count = task_errors.len()));
+        app.settings_tab.custom_task_errors = task_errors;
+        if let Some(error) = language_error.or(theme_error).or(tasks_error) {
             app.status = Status::Error(error);
         }
         // Запуск из контекстного меню проводника: сразу открываем папку.
@@ -218,6 +220,23 @@ impl HexCleanerApp {
     /// или устанавливается обновление — после него программа перезапустится.
     fn is_running(&self) -> bool {
         self.is_cleaning() || self.updater.is_installing()
+    }
+
+    /// Перечитывает свои пункты очистки (кнопка «Перечитать» на вкладке «Настройки»).
+    /// Номера пунктов меняются, поэтому итоги анализа и кнопки возврата из корзины сбрасываются.
+    fn reload_tasks(&mut self) {
+        if self.is_running() || matches!(self.trash_worker.owner(), Some(JobOwner::Undo(_))) {
+            return;
+        }
+        let (tasks, errors) = catalog::load_tasks();
+        let count = tasks.len();
+        self.tasks = Arc::new(tasks);
+        self.task_states = vec![TaskState::Idle; count];
+        self.analysis = vec![None; count];
+        self.expected = vec![None; count];
+        self.undo_run = None;
+        self.restored.clear();
+        self.settings_tab.custom_task_errors = errors;
     }
 
     /// Идёт очистка, анализ или подготовка к ним — обновляться нельзя.
@@ -1098,6 +1117,9 @@ impl eframe::App for HexCleanerApp {
                     let (tasks, window) = (Arc::clone(&self.tasks), self.window);
                     self.settings_tab.ui(ui, &mut self.settings, &tasks, &mut self.updater, self.is_admin, busy, window);
                 });
+                if std::mem::take(&mut self.settings_tab.reload_tasks) {
+                    self.reload_tasks();
+                }
             }
         }
     }
