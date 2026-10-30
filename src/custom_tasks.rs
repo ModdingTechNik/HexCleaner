@@ -21,6 +21,8 @@
 //!   в `--tasks`. Не должен совпадать со встроенным или чужим пунктом.
 //! * `title`, `description` — строкой или по кодам языков, как названия тем.
 //! * `safety` — `safe`, `moderate` (по умолчанию) или `caution`; `admin` — нужны права администратора.
+//! * `category` — встроенная категория по коду (`temp`, `caches`, `windows`, `reports`) или своя:
+//!   название строкой или по кодам языков. Без неё пункт попадает в «Свои пункты».
 //! * Действия — те же, что у встроенных пунктов, только файловые: `clear` (очистить папку,
 //!   можно с `older_than_hours`), `delete_folder` (удалить папку целиком), `delete_files`.
 //!   Пути — шаблоны с `%ПЕРЕМЕННЫМИ%` и `*`, как в каталоге.
@@ -41,7 +43,7 @@ use std::time::Duration;
 
 use serde::Deserialize;
 
-use crate::catalog::{Action, CleanupTask, CustomText, Safety};
+use crate::catalog::{Action, BUILT_IN_CATEGORIES, CUSTOM_CATEGORY, Category, CleanupTask, CustomText, Safety};
 use crate::cleaner::{is_protected, variable_value};
 use crate::i18n::{self, LocalizedText};
 use crate::t;
@@ -65,6 +67,8 @@ struct TaskDefinition {
     title: LocalizedText,
     #[serde(default)]
     description: Option<LocalizedText>,
+    #[serde(default)]
+    category: Option<LocalizedText>,
     #[serde(default)]
     safety: SafetyName,
     #[serde(default)]
@@ -172,8 +176,18 @@ fn build(definition: TaskDefinition, file: &str, taken: &BTreeSet<String>) -> Re
     }
     let actions = definition.actions.into_iter().map(build_action).collect::<Result<Vec<_>, _>>()?;
 
+    let category = match definition.category {
+        None => Category::BuiltIn(CUSTOM_CATEGORY),
+        Some(LocalizedText::Text(name)) => match BUILT_IN_CATEGORIES.iter().find(|&&id| id == name.trim()) {
+            Some(&id) => Category::BuiltIn(id),
+            None => Category::Custom(LocalizedText::Text(name)),
+        },
+        Some(name) => Category::Custom(name),
+    };
+
     Ok(CleanupTask {
         id: intern(id),
+        category,
         safety: match definition.safety {
             SafetyName::Safe => Safety::Safe,
             SafetyName::Moderate => Safety::Moderate,
@@ -325,6 +339,7 @@ mod tests {
         assert!(matches!(task.actions[0], Action::ClearDirectory { min_age: Some(age), .. } if age == Duration::from_secs(7200)));
         assert_eq!(task.custom.as_ref().unwrap().file, "a.json");
         assert!(task.description().contains("a.json"));
+        assert_eq!(task.category, Category::BuiltIn(CUSTOM_CATEGORY));
         // Восемь плохих пунктов в a.json, повтор в b.json и лишнее поле в c.json.
         assert_eq!(errors.len(), 10, "{errors:#?}");
         let _ = fs::remove_dir_all(&dir);
@@ -352,6 +367,26 @@ mod tests {
         ] {
             assert!(check_pattern(pattern, is_file).is_err(), "{pattern} принят");
         }
+    }
+
+    #[test]
+    fn categories_are_built_in_by_code_or_own_by_name() {
+        let dir = temp_dir("categories");
+        fs::write(
+            dir.join("a.json"),
+            r#"{"tasks": [
+                {"id": "c1", "title": "1", "category": "caches", "actions": [{"clear": "%TEMP%\\x"}]},
+                {"id": "c2", "title": "2", "category": "Разработка", "actions": [{"clear": "%TEMP%\\x"}]},
+                {"id": "c3", "title": "3", "category": {"ru": "Разработка", "en": "Development"}, "actions": [{"clear": "%TEMP%\\x"}]}
+            ]}"#,
+        )
+        .unwrap();
+        let (tasks, errors) = load_from(&dir, &[]);
+        assert!(errors.is_empty(), "{errors:?}");
+        assert_eq!(tasks[0].category, Category::BuiltIn("caches"));
+        assert_eq!(tasks[1].category.key(), "custom:Разработка");
+        assert_eq!(tasks[2].category.key(), "custom:Development");
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]

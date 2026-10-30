@@ -3,6 +3,7 @@
     {
       "id": "claude_desktop_cache",
       "title": { "ru": "Кэш Claude Desktop", "uk": "Кеш Claude Desktop", "en": "Claude Desktop cache" },
+      "category": "caches",
       "description": {
         "ru": "Кэш страниц, скриптов и видеокарты приложения Claude для Windows — обычно сотни мегабайт. Переписки, настройки и вход не затрагиваются. Перед очисткой закройте Claude. То же делает и сам Claude: Help → Troubleshooting → Clear Cache and Restart.",
         "uk": "Кеш сторінок, скриптів і відеокарти застосунку Claude для Windows — зазвичай сотні мегабайтів. Листування, налаштування й вхід не зачіпаються. Перед очищенням закрийте Claude. Те саме робить і сам Claude: Help → Troubleshooting → Clear Cache and Restart.",

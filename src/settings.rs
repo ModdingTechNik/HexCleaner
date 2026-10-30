@@ -4,7 +4,7 @@
 //! пунктов, требующих прав администратора, не теряется при запуске без прав
 //! и при перезапуске программы от имени администратора.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::io;
 use std::path::PathBuf;
@@ -55,6 +55,8 @@ pub struct Settings {
     pub flash_taskbar: bool,
     pub updates: UpdateSettings,
     pub trash: TrashSettings,
+    /// Свёрнутые категории в списке пунктов (`Category::key`).
+    pub collapsed_categories: BTreeSet<String>,
 }
 
 impl Default for Settings {
@@ -71,6 +73,7 @@ impl Default for Settings {
             flash_taskbar: true,
             updates: UpdateSettings::default(),
             trash: TrashSettings::default(),
+            collapsed_categories: BTreeSet::new(),
         }
     }
 }

@@ -154,12 +154,15 @@ fn print_list(settings: &Settings) {
     let level_width = Safety::ALL.iter().map(|level| level.name().chars().count()).max().unwrap_or(0);
 
     println!("{}", t!("cli.list.tasks"));
-    for task in &tasks {
-        let mark = if settings.is_task_selected(task) { "[x]" } else { "[ ]" };
-        let admin = if task.requires_admin { t!("cli.list.admin") } else { String::new() };
-        let custom = task.custom.as_ref().map(|custom| t!("cli.list.custom", file = custom.file)).unwrap_or_default();
-        let level = task.safety.name();
-        println!("  {mark} {:<id_width$}  {level:<level_width$}  {}{admin}{custom}", task.id, task.title());
+    for group in catalog::group_by_category(&tasks) {
+        println!("  {}", group.category.name());
+        for task in group.tasks.iter().map(|&index| &tasks[index]) {
+            let mark = if settings.is_task_selected(task) { "[x]" } else { "[ ]" };
+            let admin = if task.requires_admin { t!("cli.list.admin") } else { String::new() };
+            let custom = task.custom.as_ref().map(|custom| t!("cli.list.custom", file = custom.file)).unwrap_or_default();
+            let level = task.safety.name();
+            println!("    {mark} {:<id_width$}  {level:<level_width$}  {}{admin}{custom}", task.id, task.title());
+        }
     }
     println!();
     println!("{}", t!("cli.list.selected_hint"));

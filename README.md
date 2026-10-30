@@ -26,6 +26,12 @@ Both run on the same core and share the same settings.
 
 ## How it works
 
+* Items are grouped into categories: temporary data, program and game caches, Windows, reports
+  and diagnostics, your own items. A category collapses with its triangle, and its checkbox checks
+  or unchecks all of its items at once; collapsed categories are remembered. The "checked/total"
+  counter covers only items that will actually run: without administrator rights, items with
+  the shield are not counted and the category checkbox does not change them. `HexCleanerCli list`
+  also shows items by category.
 * Items with a shield icon need administrator rights. Without them they are disabled and skipped
   during cleanup, but their checkboxes are remembered. The "Run as administrator" button
   restarts the program through UAC.
@@ -369,6 +375,7 @@ One file can hold several items:
       "id": "gradle_caches",
       "title": { "ru": "Кэш Gradle", "uk": "Кеш Gradle", "en": "Gradle cache" },
       "description": "Скачанные зависимости и кэш сборки. Gradle скачает нужное заново.",
+      "category": { "ru": "Разработка", "en": "Development" },
       "safety": "moderate",
       "actions": [
         { "clear": "%USERPROFILE%\\.gradle\\caches" },
@@ -383,6 +390,7 @@ One file can hold several items:
 |---|---|
 | `id` | Lowercase Latin letters, digits, `_` and `-`. Checkmarks are saved by it and it is used in `--tasks`. Must not match another item |
 | `title`, `description` | Name and tooltip — a string or per language code, as in themes |
+| `category` | The group in the list: a built-in one by code — `temp`, `caches`, `windows`, `reports` — or your own: a name as a string or per language code. Items with the same own category from different files are grouped together. Without it — "Your own items" |
 | `safety` | `safe`, `moderate` (default) or `caution` — the dot color and the built-in presets |
 | `admin` | `true` if the folder cannot be cleaned without administrator rights |
 | `actions` | `clear` — empty a folder (with `older_than_hours`, only things older than that), `delete_folder` — delete a folder entirely, `delete_files` — delete files by mask |

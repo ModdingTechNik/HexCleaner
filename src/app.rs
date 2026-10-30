@@ -14,7 +14,7 @@ use eframe::egui::{
     PointerButton, Popup, ProgressBar, RichText, ScrollArea, TextEdit, TextStyle, TextWrapMode, Ui, WidgetText, vec2,
 };
 
-use hexcleaner::catalog::{self, CleanupTask, Safety};
+use hexcleaner::catalog::{self, CategoryGroup, CleanupTask, Safety};
 use hexcleaner::cleaner::{
     self, BlockingApp, CleanupEvent, CleanupJob, CleanupOptions, Location, Mode, TaskReport, TaskResult,
     find_blocking_apps, format_size,
@@ -588,10 +588,55 @@ impl HexCleanerApp {
 
         let tasks = Arc::clone(&self.tasks);
         ScrollArea::vertical().auto_shrink(false).show(ui, |ui| {
-            for (index, task) in tasks.iter().enumerate() {
-                self.task_entry(ui, index, task);
+            for group in catalog::group_by_category(&tasks) {
+                self.category_entry(ui, &group, &tasks);
             }
         });
+    }
+
+    /// Категория: заголовок с треугольником, общей галочкой и счётчиком отмеченных, под ним —
+    /// её пункты. Какие категории свёрнуты, запоминается в настройках.
+    fn category_entry(&mut self, ui: &mut Ui, group: &CategoryGroup, tasks: &[CleanupTask]) {
+        let key = group.category.key();
+        let id = ui.make_persistent_id(("category", &key));
+        let was_open = !self.settings.collapsed_categories.contains(&key);
+        let state = CollapsingState::load_with_default_open(ui.ctx(), id, was_open);
+
+        // Пункты, недоступные без прав администратора, всё равно будут пропущены: их нет ни в счётчике,
+        // ни в состоянии общей галочки, и она их не меняет — как и их собственные галочки.
+        let available: Vec<usize> = group.tasks.iter().copied().filter(|&index| self.is_available(&tasks[index])).collect();
+        let total = available.len();
+        let selected = available.iter().filter(|&&index| self.is_selected(&tasks[index])).count();
+        let enabled = !self.is_running() && total > 0;
+        let mut all = total > 0 && selected == total;
+
+        let (_, header, _) = state
+            .show_header(ui, |ui| {
+                let text = RichText::new(format!("{}   {selected}/{total}", group.category.name())).strong();
+                let checkbox = Checkbox::new(&mut all, text).indeterminate(selected > 0 && selected < total);
+                ui.add_enabled(enabled, checkbox).on_hover_text(t!("list.category_hint")).changed()
+            })
+            .body(|ui| {
+                for &index in &group.tasks {
+                    self.task_entry(ui, index, &tasks[index]);
+                }
+            });
+
+        if header.inner {
+            for &index in &available {
+                self.settings.set_selected(tasks[index].id, all);
+            }
+            self.settings.save();
+        }
+        let is_open = CollapsingState::load(ui.ctx(), id).map_or(was_open, |state| state.is_open());
+        if is_open != was_open {
+            if is_open {
+                self.settings.collapsed_categories.remove(&key);
+            } else {
+                self.settings.collapsed_categories.insert(key);
+            }
+            self.settings.save();
+        }
     }
 
     /// Строка над списком: набор галочек, «Отметить все» и легенда уровней безопасности.

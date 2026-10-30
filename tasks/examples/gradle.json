@@ -3,6 +3,7 @@
     {
       "id": "gradle_caches",
       "title": { "ru": "Кэш Gradle", "uk": "Кеш Gradle", "en": "Gradle cache" },
+      "category": { "ru": "Разработка", "uk": "Розробка", "en": "Development" },
       "description": {
         "ru": "Скачанные зависимости и кэш сборки Gradle (папка .gradle\\caches в профиле) — часто несколько гигабайт. Gradle скачает нужное заново, первая сборка будет дольше. Перед очисткой закройте Android Studio и IntelliJ IDEA и остановите демоны: gradle --stop.",
         "uk": "Завантажені залежності й кеш збирання Gradle (папка .gradle\\caches у профілі) — часто кілька гігабайтів. Gradle завантажить потрібне знову, перше збирання буде довшим. Перед очищенням закрийте Android Studio та IntelliJ IDEA й зупиніть демони: gradle --stop.",
@@ -17,6 +18,7 @@
     {
       "id": "gradle_wrapper_dists",
       "title": { "ru": "Версии Gradle, скачанные gradlew", "uk": "Версії Gradle, завантажені gradlew", "en": "Gradle versions downloaded by gradlew" },
+      "category": { "ru": "Разработка", "uk": "Розробка", "en": "Development" },
       "description": {
         "ru": "Дистрибутивы Gradle, которые обёртка gradlew скачала для разных проектов (.gradle\\wrapper\\dists). Нужная версия скачается заново при сборке проекта.",
         "uk": "Дистрибутиви Gradle, які обгортка gradlew завантажила для різних проєктів (.gradle\\wrapper\\dists). Потрібна версія завантажиться знову під час збирання проєкту.",

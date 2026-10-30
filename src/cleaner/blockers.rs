@@ -172,6 +172,7 @@ mod tests {
         fs::write(&held, "").unwrap();
         let task = CleanupTask {
             id: "test",
+            category: crate::catalog::Category::BuiltIn("temp"),
             safety: crate::catalog::Safety::Safe,
             programs_to_close: &[Program { exe: "powershell.exe", helpers: &[] }],
             requires_admin: false,

@@ -9,6 +9,9 @@
 //! Свои пункты пользователь описывает в JSON-файлах (см. [`crate::custom_tasks`]):
 //! они идут в списке после встроенных, тексты у них — из самих файлов.
 //!
+//! Пункты разложены по категориям ([`Category`]): в окне каждая категория — сворачиваемая
+//! группа. Свой пункт может попасть во встроенную категорию или завести свою.
+//!
 //! Пути записываются шаблонами:
 //! * `%NAME%` — переменная окружения (`%LOCALAPPDATA%`, `%WINDIR%` ...)
 //!   или специальная переменная (см. `cleaner::paths`), например `%STEAM%`;
@@ -119,11 +122,78 @@ const GAME_LAUNCHERS: &[Program] = &[
     Program { exe: "EpicGamesLauncher.exe", helpers: &["EpicWebHelper.exe"] },
 ];
 
+/// Встроенные категории в том порядке, в котором они показываются. Свои — после них.
+pub const BUILT_IN_CATEGORIES: [&str; 5] = ["temp", "caches", "windows", "reports", CUSTOM_CATEGORY];
+
+/// Категория своих пунктов, у которых она не указана.
+pub const CUSTOM_CATEGORY: &str = "custom";
+
+/// Категория пункта: группа в списке окна и в `HexCleanerCli list`.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Category {
+    /// Встроенная категория (одна из [`BUILT_IN_CATEGORIES`]); название — в переводах.
+    BuiltIn(&'static str),
+    /// Своя категория из файла своего пункта: её название.
+    Custom(LocalizedText),
+}
+
+impl Category {
+    pub fn name(&self) -> String {
+        match self {
+            Category::BuiltIn("temp") => t!("category.temp"),
+            Category::BuiltIn("caches") => t!("category.caches"),
+            Category::BuiltIn("windows") => t!("category.windows"),
+            Category::BuiltIn("reports") => t!("category.reports"),
+            Category::BuiltIn(_) => t!("category.custom"),
+            Category::Custom(name) => name.resolve().unwrap_or_default(),
+        }
+    }
+
+    /// Ключ категории, не зависящий от языка: по нему пункты группируются
+    /// и запоминается, свёрнута ли категория.
+    pub fn key(&self) -> String {
+        match self {
+            Category::BuiltIn(id) => (*id).to_owned(),
+            Category::Custom(LocalizedText::Text(name)) => format!("custom:{name}"),
+            Category::Custom(LocalizedText::ByLanguage(names)) => {
+                let name = names.get("en").or_else(|| names.values().next()).map_or("", String::as_str);
+                format!("custom:{name}")
+            }
+        }
+    }
+}
+
+/// Пункты одной категории.
+pub struct CategoryGroup {
+    pub category: Category,
+    /// Индексы пунктов в каталоге, в порядке каталога.
+    pub tasks: Vec<usize>,
+}
+
+/// Пункты по категориям: встроенные категории в своём порядке, затем свои — в порядке,
+/// в котором они встретились. Пустые категории не попадают в список.
+pub fn group_by_category(tasks: &[CleanupTask]) -> Vec<CategoryGroup> {
+    let mut groups: Vec<CategoryGroup> = BUILT_IN_CATEGORIES
+        .iter()
+        .map(|&id| CategoryGroup { category: Category::BuiltIn(id), tasks: Vec::new() })
+        .collect();
+    for (index, task) in tasks.iter().enumerate() {
+        let key = task.category.key();
+        match groups.iter_mut().find(|group| group.category.key() == key) {
+            Some(group) => group.tasks.push(index),
+            None => groups.push(CategoryGroup { category: task.category.clone(), tasks: vec![index] }),
+        }
+    }
+    groups.retain(|group| !group.tasks.is_empty());
+    groups
+}
+
 /// Пункт очистки, который пользователь видит в списке.
 pub struct CleanupTask {
     /// Стабильный идентификатор — по нему сохраняется выбор пользователя
     /// и находятся заголовок и описание в файлах перевода.
     pub id: &'static str,
+    pub category: Category,
     pub safety: Safety,
     /// Программы, которые перед очисткой можно предложить закрыть, если они держат
     /// файлы пункта (браузеры — свой кэш, Steam — свой). Только явный список:
@@ -211,6 +281,7 @@ pub fn built_in_tasks() -> Vec<CleanupTask> {
     vec![
         CleanupTask {
             id: "memory",
+            category: Category::BuiltIn("temp"),
             safety: Safety::Moderate,
             programs_to_close: &[],
             requires_admin: true,
@@ -220,6 +291,7 @@ pub fn built_in_tasks() -> Vec<CleanupTask> {
         },
         CleanupTask {
             id: "games_gpu_cache",
+            category: Category::BuiltIn("caches"),
             safety: Safety::Safe,
             programs_to_close: GAME_LAUNCHERS,
             requires_admin: false,
@@ -229,6 +301,7 @@ pub fn built_in_tasks() -> Vec<CleanupTask> {
         },
         CleanupTask {
             id: "installers_cache",
+            category: Category::BuiltIn("caches"),
             safety: Safety::Caution,
             programs_to_close: &[],
             requires_admin: true,
@@ -242,6 +315,7 @@ pub fn built_in_tasks() -> Vec<CleanupTask> {
         },
         CleanupTask {
             id: "browsers_cache",
+            category: Category::BuiltIn("caches"),
             safety: Safety::Safe,
             programs_to_close: BROWSERS,
             requires_admin: false,
@@ -251,6 +325,7 @@ pub fn built_in_tasks() -> Vec<CleanupTask> {
         },
         CleanupTask {
             id: "explorer_cache",
+            category: Category::BuiltIn("caches"),
             safety: Safety::Safe,
             programs_to_close: &[],
             requires_admin: false,
@@ -264,6 +339,7 @@ pub fn built_in_tasks() -> Vec<CleanupTask> {
         },
         CleanupTask {
             id: "defender_cache",
+            category: Category::BuiltIn("windows"),
             safety: Safety::Caution,
             programs_to_close: &[],
             requires_admin: true,
@@ -278,6 +354,7 @@ pub fn built_in_tasks() -> Vec<CleanupTask> {
         },
         CleanupTask {
             id: "windows_setup_cache",
+            category: Category::BuiltIn("windows"),
             safety: Safety::Caution,
             programs_to_close: &[],
             requires_admin: true,
@@ -292,6 +369,7 @@ pub fn built_in_tasks() -> Vec<CleanupTask> {
         },
         CleanupTask {
             id: "windows_update_cache",
+            category: Category::BuiltIn("windows"),
             safety: Safety::Moderate,
             programs_to_close: &[],
             requires_admin: true,
@@ -306,6 +384,7 @@ pub fn built_in_tasks() -> Vec<CleanupTask> {
         },
         CleanupTask {
             id: "system_logs",
+            category: Category::BuiltIn("windows"),
             safety: Safety::Caution,
             programs_to_close: &[],
             requires_admin: true,
@@ -315,6 +394,7 @@ pub fn built_in_tasks() -> Vec<CleanupTask> {
         },
         CleanupTask {
             id: "driver_leftovers",
+            category: Category::BuiltIn("windows"),
             safety: Safety::Safe,
             programs_to_close: &[],
             requires_admin: true,
@@ -328,6 +408,7 @@ pub fn built_in_tasks() -> Vec<CleanupTask> {
         },
         CleanupTask {
             id: "user_temp",
+            category: Category::BuiltIn("temp"),
             safety: Safety::Safe,
             programs_to_close: &[],
             requires_admin: false,
@@ -337,6 +418,7 @@ pub fn built_in_tasks() -> Vec<CleanupTask> {
         },
         CleanupTask {
             id: "system_temp",
+            category: Category::BuiltIn("temp"),
             safety: Safety::Safe,
             programs_to_close: &[],
             requires_admin: true,
@@ -351,6 +433,7 @@ pub fn built_in_tasks() -> Vec<CleanupTask> {
         },
         CleanupTask {
             id: "diagnostics",
+            category: Category::BuiltIn("reports"),
             safety: Safety::Moderate,
             programs_to_close: &[],
             requires_admin: true,
@@ -364,6 +447,7 @@ pub fn built_in_tasks() -> Vec<CleanupTask> {
         },
         CleanupTask {
             id: "user_reports",
+            category: Category::BuiltIn("reports"),
             safety: Safety::Safe,
             programs_to_close: &[],
             requires_admin: false,
@@ -376,6 +460,7 @@ pub fn built_in_tasks() -> Vec<CleanupTask> {
         },
         CleanupTask {
             id: "system_reports",
+            category: Category::BuiltIn("reports"),
             safety: Safety::Moderate,
             programs_to_close: &[],
             requires_admin: true,
@@ -392,6 +477,7 @@ pub fn built_in_tasks() -> Vec<CleanupTask> {
         },
         CleanupTask {
             id: "recycle_bin",
+            category: Category::BuiltIn("temp"),
             // Это файлы, которые пользователь удалил сам: после очистки их не вернуть.
             safety: Safety::Caution,
             programs_to_close: &[],
@@ -494,4 +580,58 @@ fn system_log_actions() -> Vec<Action> {
     actions.push(delete_files(r"%WINDIR%\INF\setupapi*.log"));
     actions.push(delete_files(r"%WINDIR%\debug\*.log"));
     actions
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// У каждого встроенного пункта — встроенная категория; группы идут в порядке
+    /// [`BUILT_IN_CATEGORIES`], внутри — в порядке каталога, пустых нет.
+    #[test]
+    fn built_in_tasks_are_grouped_by_category() {
+        let tasks = built_in_tasks();
+        assert!(tasks.iter().all(|task| matches!(task.category, Category::BuiltIn(id) if BUILT_IN_CATEGORIES.contains(&id))));
+
+        let groups = group_by_category(&tasks);
+        let keys: Vec<String> = groups.iter().map(|group| group.category.key()).collect();
+        assert_eq!(keys, ["temp", "caches", "windows", "reports"]);
+        assert_eq!(groups.iter().map(|group| group.tasks.len()).sum::<usize>(), tasks.len());
+        assert!(groups.iter().all(|group| group.tasks.windows(2).all(|pair| pair[0] < pair[1])));
+    }
+
+    #[test]
+    fn custom_categories_follow_built_in_ones() {
+        let mut tasks = built_in_tasks();
+        let custom = |id: &'static str, category: Category| CleanupTask {
+            id,
+            category,
+            safety: Safety::Safe,
+            programs_to_close: &[],
+            requires_admin: false,
+            services_to_stop: &[],
+            custom: None,
+            actions: Vec::new(),
+        };
+        let development = || {
+            Category::Custom(LocalizedText::ByLanguage(
+                [("ru".to_owned(), "Разработка".to_owned()), ("en".to_owned(), "Development".to_owned())].into(),
+            ))
+        };
+        tasks.push(custom("gradle", development()));
+        tasks.push(custom("claude", Category::BuiltIn("caches")));
+        tasks.push(custom("npm", development()));
+        tasks.push(custom("mine", Category::BuiltIn(CUSTOM_CATEGORY)));
+
+        let groups = group_by_category(&tasks);
+        let keys: Vec<String> = groups.iter().map(|group| group.category.key()).collect();
+        assert_eq!(keys, ["temp", "caches", "windows", "reports", "custom", "custom:Development"]);
+        let ids = |key: &str| -> Vec<&str> {
+            let group = groups.iter().find(|group| group.category.key() == key).unwrap();
+            group.tasks.iter().map(|&index| tasks[index].id).collect()
+        };
+        assert_eq!(ids("custom:Development"), ["gradle", "npm"]);
+        assert_eq!(ids("caches").last(), Some(&"claude"));
+        assert_eq!(ids("custom"), ["mine"]);
+    }
 }
