@@ -5,13 +5,15 @@ use std::path::{Path, PathBuf};
 use eframe::egui::{self, Checkbox, ComboBox, DragValue, Grid, RichText, ScrollArea, Slider, Ui};
 use hexcleaner::catalog::CleanupTask;
 use hexcleaner::i18n::{self, LanguageInfo};
-use hexcleaner::settings::{Settings, Theme};
+use hexcleaner::settings::Settings;
 use hexcleaner::system::drives;
 use hexcleaner::system::explorer_menu::{self, MenuState};
+use hexcleaner::themes::{self, ThemeInfo};
 use hexcleaner::trash::{Compression, MAX_KEEP_DAYS, TrashPolicy, TrashSettings};
 use hexcleaner::{t, update};
 
 use crate::app::{open_in_explorer, trash_policy_name, window_title};
+use crate::theme;
 use crate::update_ui::Updater;
 
 /// Деления ползунка размера корзины: 0 — корзина отключена, `None` — без ограничений.
@@ -45,6 +47,10 @@ pub struct SettingsTab {
     languages: Vec<LanguageInfo>,
     /// Ошибка при смене языка или чтении файлов переводов.
     error: Option<String>,
+    /// Темы для списка выбора: встроенные и найденные в папке тем.
+    themes: Vec<ThemeInfo>,
+    /// Ошибка при смене темы или чтении файлов тем.
+    theme_error: Option<String>,
     /// Путь к запущенной программе — её запускает пункт меню проводника.
     exe: Option<PathBuf>,
     /// Пункт в меню проводника по последнему чтению реестра.
@@ -57,11 +63,14 @@ impl SettingsTab {
         let mut tab = Self {
             languages: Vec::new(),
             error: None,
+            themes: Vec::new(),
+            theme_error: None,
             exe: std::env::current_exe().ok(),
             menu: explorer_menu::state(),
             menu_error: None,
         };
         tab.refresh_languages();
+        tab.refresh_themes();
         // Программу перенесли в другую папку — пункт меню ведёт в пустоту, переписываем его на эту копию.
         if tab.menu.installed && tab.menu.exe.as_deref().is_none_or(|exe| !exe.exists()) {
             tab.update_menu(true, tab.menu.shift_only, tab.exe.clone());
@@ -90,10 +99,10 @@ impl SettingsTab {
                 ui.end_row();
 
                 ui.label(t!("settings.theme"));
-                theme_selector(ui, settings);
+                self.theme_selector(ui, settings);
                 ui.end_row();
             });
-            if let Some(error) = &self.error {
+            for error in [&self.error, &self.theme_error].into_iter().flatten() {
                 ui.label(RichText::new(error).color(ui.visuals().error_fg_color));
             }
 
@@ -198,6 +207,57 @@ impl SettingsTab {
             .then(|| t!("status.broken_language_files", files = broken_files.join(", ")));
     }
 
+    /// Перечитывает список тем, чтобы в нём появились новые файлы из папки тем.
+    fn refresh_themes(&mut self) {
+        let (themes, broken_files) = themes::available_themes();
+        self.themes = themes;
+        self.theme_error =
+            (!broken_files.is_empty()).then(|| t!("status.broken_theme_files", files = broken_files.join(", ")));
+    }
+
+    /// Название темы `id` для списка: «Как в системе», название из файла или сам код.
+    fn theme_name(&self, id: &str) -> String {
+        if id == themes::SYSTEM {
+            return t!("theme.system");
+        }
+        self.themes.iter().find(|theme| theme.id == id).map_or_else(|| id.to_owned(), |theme| theme.name.clone())
+    }
+
+    fn theme_selector(&mut self, ui: &mut Ui, settings: &mut Settings) {
+        let mut chosen = None;
+        ui.horizontal(|ui| {
+            let combo = ComboBox::from_id_salt("theme")
+                .selected_text(self.theme_name(&settings.theme))
+                .width(180.0)
+                .show_ui(ui, |ui| {
+                    let ids = std::iter::once(themes::SYSTEM).chain(self.themes.iter().map(|theme| theme.id.as_str()));
+                    for id in ids {
+                        if ui.selectable_label(settings.theme == id, self.theme_name(id)).clicked() {
+                            chosen = Some(id.to_owned());
+                        }
+                    }
+                });
+            // Список перечитывается при каждом открытии — так подхватываются новые файлы тем.
+            if combo.response.clicked() {
+                self.refresh_themes();
+            }
+            combo.response.on_hover_text(t!("settings.theme.hint"));
+
+            let folder = ui.button(t!("settings.themes_folder")).on_hover_text(t!("settings.themes_folder.hint"));
+            if folder.clicked() {
+                themes::export_built_in_themes();
+                open_in_explorer(&themes::themes_directory());
+            }
+        });
+
+        // Выбор той же темы тоже применяет её заново — так видны правки в её файле.
+        let Some(id) = chosen else { return };
+        self.refresh_themes();
+        self.theme_error = theme::apply(ui.ctx(), &id).or(self.theme_error.take());
+        settings.theme = id;
+        settings.save();
+    }
+
     fn language_selector(&mut self, ui: &mut Ui, settings: &mut Settings, is_admin: bool) {
         let current = settings.language.clone().unwrap_or_else(|| i18n::system_language().to_owned());
         let current_name = self
@@ -245,25 +305,6 @@ impl SettingsTab {
     }
 }
 
-fn theme_selector(ui: &mut Ui, settings: &mut Settings) {
-    let mut theme = settings.theme;
-    ComboBox::from_id_salt("theme")
-        .selected_text(theme_name(theme))
-        .width(180.0)
-        .show_ui(ui, |ui| {
-            for option in [Theme::Dark, Theme::Light, Theme::System] {
-                ui.selectable_value(&mut theme, option, theme_name(option));
-            }
-        })
-        .response
-        .on_hover_text(t!("settings.theme.hint"));
-
-    if theme != settings.theme {
-        settings.theme = theme;
-        settings.save();
-        ui.ctx().set_theme(egui_theme(theme));
-    }
-}
 
 /// Пути Windows сравниваются без учёта регистра.
 fn same_path(a: &Path, b: &Path) -> bool {
@@ -277,21 +318,6 @@ fn section(ui: &mut Ui, title: String) {
     ui.add_space(2.0);
 }
 
-fn theme_name(theme: Theme) -> String {
-    match theme {
-        Theme::Dark => t!("theme.dark"),
-        Theme::Light => t!("theme.light"),
-        Theme::System => t!("theme.system"),
-    }
-}
-
-pub fn egui_theme(theme: Theme) -> egui::ThemePreference {
-    match theme {
-        Theme::Dark => egui::ThemePreference::Dark,
-        Theme::Light => egui::ThemePreference::Light,
-        Theme::System => egui::ThemePreference::System,
-    }
-}
 
 /// Раздел «Корзина». Возвращает `true`, если что-то изменилось.
 fn trash_section(ui: &mut Ui, trash: &mut TrashSettings, tasks: &[CleanupTask], window: Option<isize>) -> bool {

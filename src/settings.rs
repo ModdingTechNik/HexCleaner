@@ -14,6 +14,7 @@ use serde::{Deserialize, Serialize};
 use crate::catalog::CleanupTask;
 use crate::presets::{Selection, UserPreset};
 use crate::schedule::Schedule;
+use crate::themes;
 use crate::trash::TrashSettings;
 use crate::update::UpdateSettings;
 
@@ -26,17 +27,6 @@ pub enum Compression {
     Ntfs,
     /// Упаковка в zip-архивы.
     Zip,
-}
-
-/// Тема оформления.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum Theme {
-    #[default]
-    Dark,
-    Light,
-    /// Как в настройках Windows.
-    System,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -56,7 +46,9 @@ pub struct Settings {
     pub log_compression: Compression,
     /// Код языка (имя файла перевода). `None` — язык Windows.
     pub language: Option<String>,
-    pub theme: Theme,
+    /// Код темы оформления (имя файла темы, см. `crate::themes`) или `system` — как в Windows.
+    /// Прежние значения `dark`, `light` и `system` — коды встроенных тем, их менять не нужно.
+    pub theme: String,
     /// Всплывающее уведомление, когда анализ или очистка закончились.
     pub notify_when_done: bool,
     /// Мигать кнопкой на панели задач, если окно неактивно, когда анализ или очистка закончились.
@@ -74,7 +66,7 @@ impl Default for Settings {
             compress_old_logs: true,
             log_compression: Compression::Zip,
             language: None,
-            theme: Theme::default(),
+            theme: themes::DEFAULT.to_owned(),
             notify_when_done: true,
             flash_taskbar: true,
             updates: UpdateSettings::default(),
@@ -130,5 +122,20 @@ impl Settings {
     /// Все отмеченные пункты, включая требующие прав администратора.
     pub fn selection(&self, tasks: &[CleanupTask]) -> Selection {
         tasks.iter().filter(|task| self.is_task_selected(task)).map(|task| task.id.to_owned()).collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Тема раньше была перечислением `dark`/`light`/`system` — такие настройки читаются как коды тем.
+    #[test]
+    fn reads_theme_saved_before_theme_files() {
+        let settings: Settings = serde_json::from_str(r#"{"theme": "light", "flash_taskbar": false}"#).unwrap();
+        assert_eq!(settings.theme, "light");
+        assert!(!settings.flash_taskbar);
+        let settings: Settings = serde_json::from_str("{}").unwrap();
+        assert_eq!(settings.theme, themes::DEFAULT);
     }
 }

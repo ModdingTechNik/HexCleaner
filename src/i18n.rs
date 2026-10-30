@@ -82,12 +82,14 @@ impl Display for LanguageError {
 
 /// Загруженный перевод вместе с запасным языком.
 struct Translation {
+    code: String,
     strings: HashMap<String, String>,
     fallback: HashMap<String, String>,
 }
 
 static CURRENT: LazyLock<RwLock<Arc<Translation>>> = LazyLock::new(|| {
     let translation = Translation {
+        code: DEFAULT_LANGUAGE.to_owned(),
         strings: built_in(DEFAULT_LANGUAGE).map(|file| file.strings).unwrap_or_default(),
         fallback: built_in(FALLBACK_LANGUAGE).map(|file| file.strings).unwrap_or_default(),
     };
@@ -104,6 +106,11 @@ pub fn text(key: &str) -> String {
         .or_else(|| translation.fallback.get(key))
         .cloned()
         .unwrap_or_else(|| key.to_owned())
+}
+
+/// Код включённого языка, например `ru`.
+pub fn current_language() -> String {
+    CURRENT.read().unwrap_or_else(|error| error.into_inner()).code.clone()
 }
 
 /// Текст по ключу с подстановкой значений вместо `{имя}`.
@@ -179,7 +186,7 @@ pub fn available_languages() -> (Vec<LanguageInfo>, Vec<String>) {
         .collect();
     let mut broken = Vec::new();
 
-    for path in language_files(&languages_directory()) {
+    for path in json_files(&languages_directory()) {
         let Some(code) = path.file_stem().map(|stem| stem.to_string_lossy().into_owned()) else { continue };
         match read_language_file(&path) {
             Ok(file) => {
@@ -214,7 +221,7 @@ fn load(code: &str, dir: &Path) -> Result<Translation, LanguageError> {
         return Err(LanguageError::NotFound);
     }
     let fallback = built_in(FALLBACK_LANGUAGE).map(|file| file.strings).unwrap_or_default();
-    Ok(Translation { strings, fallback })
+    Ok(Translation { code: code.to_owned(), strings, fallback })
 }
 
 fn built_in(code: &str) -> Option<LanguageFile> {
@@ -232,7 +239,8 @@ fn read_language_file(path: &Path) -> Result<LanguageFile, LanguageError> {
     serde_json::from_str(text.trim_start_matches('\u{feff}')).map_err(|error| invalid(error.to_string()))
 }
 
-fn language_files(dir: &Path) -> Vec<PathBuf> {
+/// Файлы `*.json` в папке (переводы, темы).
+pub(crate) fn json_files(dir: &Path) -> Vec<PathBuf> {
     let Ok(entries) = fs::read_dir(dir) else { return Vec::new() };
     entries
         .filter_map(Result::ok)

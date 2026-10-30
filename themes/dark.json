@@ -1,0 +1,32 @@
+{
+  "name": { "ru": "Тёмная", "uk": "Темна", "en": "Dark" },
+  "base": "dark",
+  "colors": {
+    "background": "#1B1B1B",
+    "window": "#1B1B1B",
+    "window_border": "#3C3C3C",
+    "input": "#0A0A0A",
+    "stripe": "#202020",
+    "text": "#8C8C8C",
+    "text_weak": "#8C8C8C99",
+    "border": "#3C3C3C",
+    "button": "#323232",
+    "button_text": "#D7D7D7",
+    "button_hovered": "#404040",
+    "button_hovered_text": "#F5F5F5",
+    "button_hovered_border": "#969696",
+    "button_pressed": "#282828",
+    "button_pressed_text": "#FFFFFF",
+    "button_open": "#2D2D2D",
+    "accent": "#005C80",
+    "accent_text": "#C0DEFF",
+    "link": "#5AAAFF",
+    "warning": "#FF8F00",
+    "error": "#FF0000",
+    "success": "#7CC47F",
+    "found": "#E8B94A",
+    "failure": "#E56B6B",
+    "chart_rest": "#9A9A9A"
+  },
+  "chart": ["#4E79A7", "#F28E2B", "#E15759", "#76B7B2", "#59A14F", "#EDC948", "#B07AA1", "#FF9DA7", "#9C755F", "#5FA2CE"]
+}

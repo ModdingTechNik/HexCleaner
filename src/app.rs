@@ -30,46 +30,11 @@ use hexcleaner::t;
 use crate::disk_tab::DiskTab;
 use crate::progress::{CleanupProgress, TaskProgress, cleanup_progress};
 use crate::schedule_tab::ScheduleTab;
-use crate::settings_tab::{SettingsTab, egui_theme};
+use crate::settings_tab::SettingsTab;
+use crate::theme::{self, Palette};
 use crate::trash_tab::{JobOwner, JobResult, TrashTab, TrashWorker};
 use crate::update_ui::Updater;
 use crate::widgets::{dot, dot_atom, shield_atom, shield_icon, undo_atom, warning_atom};
-
-/// Цвета результатов, подобранные под тёмную и светлую темы.
-struct Palette {
-    /// Итоги очистки.
-    success: Color32,
-    /// Итоги анализа.
-    found: Color32,
-    error: Color32,
-}
-
-impl Palette {
-    fn of(ui: &Ui) -> Self {
-        if ui.visuals().dark_mode {
-            Self {
-                success: Color32::from_rgb(0x7C, 0xC4, 0x7F),
-                found: Color32::from_rgb(0xE8, 0xB9, 0x4A),
-                error: Color32::from_rgb(0xE5, 0x6B, 0x6B),
-            }
-        } else {
-            Self {
-                success: Color32::from_rgb(0x2E, 0x7D, 0x32),
-                found: Color32::from_rgb(0xA8, 0x5F, 0x00),
-                error: Color32::from_rgb(0xC6, 0x28, 0x28),
-            }
-        }
-    }
-
-    /// Цвет точки уровня безопасности: зелёный, жёлтый, красный.
-    fn safety(&self, safety: Safety) -> Color32 {
-        match safety {
-            Safety::Safe => self.success,
-            Safety::Moderate => self.found,
-            Safety::Caution => self.error,
-        }
-    }
-}
 
 /// Что пользователь выбрал в списке наборов.
 enum PresetAction {
@@ -198,7 +163,7 @@ impl HexCleanerApp {
         language_error: Option<String>,
         open_folder: Option<PathBuf>,
     ) -> Self {
-        cc.egui_ctx.set_theme(egui_theme(settings.theme));
+        let theme_error = theme::apply(&cc.egui_ctx, &settings.theme);
         use_system_font(&cc.egui_ctx);
 
         let tasks = catalog::all_tasks();
@@ -238,7 +203,7 @@ impl HexCleanerApp {
             let trash = Trash::new(app.settings.trash.directory());
             thread::spawn(move || trash.remove_expired(days, chrono::Local::now()));
         }
-        if let Some(error) = language_error {
+        if let Some(error) = language_error.or(theme_error) {
             app.status = Status::Error(error);
         }
         // Запуск из контекстного меню проводника: сразу открываем папку.
@@ -787,7 +752,7 @@ impl HexCleanerApp {
             // Отступ под полосу прокрутки, чтобы она не закрывала цифры.
             ui.add_space(ui.spacing().scroll.bar_width + 4.0);
             if let Some(report) = self.restored.get(&index) {
-                let color = if report.failed.is_empty() { result_color } else { palette.error };
+                let color = if report.failed.is_empty() { result_color } else { palette.failure };
                 ui.label(RichText::new(report.summary()).color(color));
                 return;
             }
@@ -930,7 +895,7 @@ impl HexCleanerApp {
                 let size = vec2(CLEAN_BUTTON_WIDTH, FOOTER_BUTTON_HEIGHT);
                 let (clean, hint) = if bypass {
                     let text = RichText::new(t!("footer.clean_permanently")).strong().color(Color32::WHITE);
-                    let button = Button::new((warning_atom(16.0), text)).fill(Palette::of(ui).error).min_size(size);
+                    let button = Button::new((warning_atom(16.0), text)).fill(Palette::of(ui).failure).min_size(size);
                     (button, t!("footer.clean_permanently.hint"))
                 } else {
                     let hint = if trash_enabled { t!("footer.clean.hint_shift") } else { t!("footer.clean.hint_no_trash") };
@@ -1026,7 +991,7 @@ impl HexCleanerApp {
                 ui.label(RichText::new(text).strong());
             }
             Status::Error(message) => {
-                ui.label(RichText::new(message).color(Palette::of(ui).error));
+                ui.label(RichText::new(message).color(Palette::of(ui).failure));
             }
         }
     }

@@ -24,6 +24,7 @@ use hexcleaner::t;
 use hexcleaner::trash::{RemoveReport, Trash, TrashDecision};
 
 use crate::app::open_in_explorer;
+use crate::theme::Palette;
 use crate::trash_tab::{JobOwner, TrashWorker};
 use crate::widgets::warning_atom;
 
@@ -35,23 +36,6 @@ const CHART_WIDTH: f32 = 250.0;
 
 /// Высота строки списка.
 const ROW_HEIGHT: f32 = 22.0;
-
-/// Цвета секторов. Подобраны так, чтобы читаться и на тёмной, и на светлой теме.
-const PALETTE: [Color32; 10] = [
-    Color32::from_rgb(0x4E, 0x79, 0xA7),
-    Color32::from_rgb(0xF2, 0x8E, 0x2B),
-    Color32::from_rgb(0xE1, 0x57, 0x59),
-    Color32::from_rgb(0x76, 0xB7, 0xB2),
-    Color32::from_rgb(0x59, 0xA1, 0x4F),
-    Color32::from_rgb(0xED, 0xC9, 0x48),
-    Color32::from_rgb(0xB0, 0x7A, 0xA1),
-    Color32::from_rgb(0xFF, 0x9D, 0xA7),
-    Color32::from_rgb(0x9C, 0x75, 0x5F),
-    Color32::from_rgb(0x5F, 0xA2, 0xCE),
-];
-
-/// Цвет сектора «Остальное».
-const REST_COLOR: Color32 = Color32::from_rgb(0x9A, 0x9A, 0x9A);
 
 #[derive(Default)]
 pub struct DiskTab {
@@ -557,7 +541,7 @@ impl DiskTab {
 
     /// Список слева, диаграмма справа (если хватает ширины).
     fn content(&self, ui: &mut Ui, action: &mut Option<Action>, context: &DeleteContext) {
-        let colors = self.slice_colors();
+        let colors = self.slice_colors(&Palette::of(ui));
         let total = self.current_node().map_or(0, |node| node.size);
         let available = ui.available_size();
         let show_chart = available.x >= CHART_WIDTH * 2.2;
@@ -616,18 +600,18 @@ impl DiskTab {
     }
 
     /// Цвет каждого элемента списка, попавшего на диаграмму отдельным сектором или в «Остальное».
-    fn slice_colors(&self) -> HashMap<usize, Color32> {
+    fn slice_colors(&self, palette: &Palette) -> HashMap<usize, Color32> {
         let items = self.chart_items();
         let sizes: Vec<u64> = items.iter().map(|&index| self.entries[index].size).collect();
         let mut colors = HashMap::new();
         for (number, slice) in disk_usage::slices(&sizes, MIN_SLICE_SHARE).into_iter().enumerate() {
             match slice {
                 Slice::Item(item) => {
-                    colors.insert(items[item], PALETTE[number % PALETTE.len()]);
+                    colors.insert(items[item], palette.chart(number));
                 }
                 Slice::Rest(rest) => {
                     for item in rest {
-                        colors.insert(items[item], REST_COLOR);
+                        colors.insert(items[item], palette.chart_rest);
                     }
                 }
             }
@@ -655,12 +639,13 @@ impl DiskTab {
         let inner = outer * 0.55;
 
         // Секторы по часовой стрелке от верхней точки.
+        let palette = Palette::of(ui);
         let mut start = -FRAC_PI_2;
         let mut arcs = Vec::with_capacity(slices.len());
         for (number, slice) in slices.iter().enumerate() {
             let (size, color) = match slice {
-                Slice::Item(item) => (sizes[*item], PALETTE[number % PALETTE.len()]),
-                Slice::Rest(rest) => (rest.iter().map(|&item| sizes[item]).sum(), REST_COLOR),
+                Slice::Item(item) => (sizes[*item], palette.chart(number)),
+                Slice::Rest(rest) => (rest.iter().map(|&item| sizes[item]).sum(), palette.chart_rest),
             };
             let end = start + TAU * (size as f64 / total as f64) as f32;
             arcs.push((start, end, color, size));

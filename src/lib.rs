@@ -7,6 +7,7 @@
 //! * [`presets`] — наборы галочек;
 //! * [`schedule`] — плановая очистка: задания для Планировщика заданий Windows;
 //! * [`settings`] — настройки, общие для окна и командной строки;
+//! * [`themes`] — темы оформления: цвета окна в JSON-файлах;
 //! * [`trash`] — корзина: удалённое при очистке можно вернуть;
 //! * [`update`] — обновление программы из релизов GitHub;
 //! * [`i18n`] — переводы, макрос [`t!`];
@@ -22,5 +23,6 @@ pub mod presets;
 pub mod schedule;
 pub mod settings;
 pub mod system;
+pub mod themes;
 pub mod trash;
 pub mod update;

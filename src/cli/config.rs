@@ -12,9 +12,10 @@ use std::path::PathBuf;
 
 use crate::catalog::{self, CleanupTask};
 use crate::i18n;
-use crate::settings::{Compression, Settings, Theme};
+use crate::settings::{Compression, Settings};
 use crate::system::explorer_menu::{self, MenuState};
 use crate::t;
+use crate::themes;
 use crate::trash::{MAX_KEEP_DAYS, TrashPolicy};
 
 use super::{ExitCode, UsageError};
@@ -188,7 +189,7 @@ fn value(key: Key, settings: &Settings, menu: &MenuState) -> String {
     let trash = &settings.trash;
     match key {
         Key::Language => settings.language.clone().unwrap_or_else(|| "system".to_owned()),
-        Key::Theme => theme_name(settings.theme).to_owned(),
+        Key::Theme => settings.theme.clone(),
         Key::Notify => on_off(settings.notify_when_done),
         Key::FlashTaskbar => on_off(settings.flash_taskbar),
         Key::LogsCompress => on_off(settings.compress_old_logs),
@@ -216,7 +217,7 @@ fn description(key: Key, settings: &Settings) -> String {
             let codes: Vec<String> = i18n::available_languages().0.into_iter().map(|language| language.code).collect();
             t!("cli.config.language", codes = codes.join(", "), system = i18n::system_language())
         }
-        Key::Theme => t!("cli.config.theme"),
+        Key::Theme => t!("cli.config.theme", themes = theme_ids().join(", "), folder = themes::themes_directory().display()),
         Key::Notify => t!("cli.config.notify"),
         Key::FlashTaskbar => t!("cli.config.flash_taskbar"),
         Key::LogsCompress => t!("cli.config.logs_compress"),
@@ -240,7 +241,11 @@ fn expected(key: Key) -> String {
             codes.push("system".to_owned());
             codes.join(", ")
         }
-        Key::Theme => "dark, light, system".to_owned(),
+        Key::Theme => {
+            let mut ids = theme_ids();
+            ids.push(themes::SYSTEM.to_owned());
+            ids.join(", ")
+        }
         Key::Notify | Key::FlashTaskbar | Key::LogsCompress | Key::TrashCompress | Key::UpdatesCheck => {
             "on, off".to_owned()
         }
@@ -266,7 +271,12 @@ fn set(key: Key, text: &str, settings: &mut Settings) -> Result<Change, UsageErr
             let language = languages.iter().find(|language| language.code.eq_ignore_ascii_case(&lower)).ok_or_else(invalid)?;
             settings.language = Some(language.code.clone());
         }
-        Key::Theme => settings.theme = parse_theme(&lower).ok_or_else(invalid)?,
+        Key::Theme if lower == themes::SYSTEM => settings.theme = themes::SYSTEM.to_owned(),
+        Key::Theme => {
+            // Код темы — имя файла: в нём может быть и заглавная буква.
+            let id = theme_ids().into_iter().find(|id| id.eq_ignore_ascii_case(&lower)).ok_or_else(invalid)?;
+            settings.theme = id;
+        }
         Key::Notify => settings.notify_when_done = parse_bool(&lower).ok_or_else(invalid)?,
         Key::FlashTaskbar => settings.flash_taskbar = parse_bool(&lower).ok_or_else(invalid)?,
         Key::LogsCompress => settings.compress_old_logs = parse_bool(&lower).ok_or_else(invalid)?,
@@ -346,16 +356,9 @@ fn parse_bool(value: &str) -> Option<bool> {
     }
 }
 
-fn theme_name(theme: Theme) -> &'static str {
-    match theme {
-        Theme::Dark => "dark",
-        Theme::Light => "light",
-        Theme::System => "system",
-    }
-}
-
-fn parse_theme(value: &str) -> Option<Theme> {
-    [Theme::Dark, Theme::Light, Theme::System].into_iter().find(|&theme| theme_name(theme) == value)
+/// Коды тем: встроенных и из папки тем.
+fn theme_ids() -> Vec<String> {
+    themes::available_themes().0.into_iter().map(|theme| theme.id).collect()
 }
 
 fn compression_name(compression: Compression) -> &'static str {
@@ -471,7 +474,9 @@ mod tests {
     fn sets_values() {
         let mut settings = Settings::default();
         assert_eq!(set_text(&mut settings, "theme", "Light"), Ok(Change::Settings));
-        assert_eq!(settings.theme, Theme::Light);
+        assert_eq!(settings.theme, "light");
+        set_text(&mut settings, "theme", "system").unwrap();
+        assert_eq!(settings.theme, "system");
         set_text(&mut settings, "notify", "off").unwrap();
         assert!(!settings.notify_when_done);
         set_text(&mut settings, "logs.compression", "ntfs").unwrap();

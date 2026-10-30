@@ -308,6 +308,47 @@ texts you want to change. A deleted built-in language file is recreated at the n
 Tests check that every key used in the code has a translation, that the dictionaries contain no
 unused keys, and that no untranslated Russian strings are left in the code.
 
+## Themes
+
+Window colors live in JSON files too, just like translations. The built-in themes, dark and
+light (`themes/dark.json`, `themes/light.json`), are embedded in the program and written to
+`%APPDATA%\HexCleaner\themes` on start (the "Themes folder…" button on the "Settings" tab).
+They list every color that can be set. To add your own theme, put e.g. `ocean.json` into that
+folder — the file name becomes the theme code:
+
+```json
+{
+  "name": { "ru": "Океан", "uk": "Океан", "en": "Ocean" },
+  "base": "light",
+  "colors": { "accent": "#0077BE", "link": "#0077BE", "background": "#EEF5FA" }
+}
+```
+
+* `name` — the name in the list: a string or per language code (the program language is used,
+  then English). Without it the list shows the file name.
+* `base` — `dark` or `light`: colors missing from `colors` are taken from this theme.
+* `colors` — `#RRGGBB` colors, or `#RRGGBBAA` with transparency; `chart` — a list of slice colors.
+
+| Color | Where it shows |
+|---|---|
+| `background`, `window`, `window_border` | Window background; dialogs, lists, tooltips and their border |
+| `input`, `stripe` | Text fields and progress bars; alternating table rows |
+| `text`, `text_weak` | Regular text; explanations |
+| `border` | Separators and group frames |
+| `button`, `button_text` | Buttons, checkboxes, sliders and their text |
+| `button_hovered`, `button_hovered_text`, `button_hovered_border` | The same under the mouse |
+| `button_pressed`, `button_pressed_text`, `button_open` | Pressed; an open drop-down |
+| `accent`, `accent_text` | Selection: the chosen item, slider fill, selected text |
+| `link`, `warning`, `error` | Links, warnings, errors |
+| `success`, `found`, `failure` | Cleanup and analysis totals, cleanup errors, safety level dots, the "Delete permanently" button |
+| `chart` (a list), `chart_rest` | Chart slices on the "Disk space" tab and the "Other" slice |
+
+A new theme appears in the list as soon as you open it; changes to a file show up when you
+choose the theme again. A `dark.json` or `light.json` in that folder extends the built-in theme:
+it only needs the colors you want to change. "System" switches the built-in dark and
+light themes following Windows. Colors that were not understood and file errors are shown in
+the settings, and a theme can also be chosen from the command line: `HexCleanerCli config set theme ocean`.
+
 ## Icon
 
 The sources are `assets/icon.svg` (for 32 px and larger) and `assets/icon-small.svg`
@@ -328,6 +369,7 @@ This rebuilds `assets/icon.ico` (all Windows sizes) and `assets/icon-256.png`
 | `src/catalog.rs` | The list of cleanup items and paths. **New items are added here.** |
 | `src/presets.rs` | Presets: built-in by safety level and saved by the user |
 | `src/i18n.rs`, `languages/` | Localization: loading translations, the `t!` macro, built-in dictionaries |
+| `src/themes.rs`, `src/theme.rs`, `themes/` | Themes: theme files and list; applying colors to the window; built-in themes |
 | `src/cleaner/` | The cleanup engine: thread, events for the interface, file deletion, log, statistics |
 | `src/system/` | Windows API wrappers (rights, services, event logs, memory, Restart Manager, HTTPS, SHA-256). All `unsafe` code lives here |
 | `src/settings.rs` | Saving the selected items, presets and settings |

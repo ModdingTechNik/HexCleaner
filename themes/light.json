@@ -1,0 +1,32 @@
+{
+  "name": { "ru": "Светлая", "uk": "Світла", "en": "Light" },
+  "base": "light",
+  "colors": {
+    "background": "#F8F8F8",
+    "window": "#F8F8F8",
+    "window_border": "#BEBEBE",
+    "input": "#FFFFFF",
+    "stripe": "#FDFDFD",
+    "text": "#505050",
+    "text_weak": "#50505099",
+    "border": "#BEBEBE",
+    "button": "#E6E6E6",
+    "button_text": "#3C3C3C",
+    "button_hovered": "#DCDCDC",
+    "button_hovered_text": "#000000",
+    "button_hovered_border": "#696969",
+    "button_pressed": "#A5A5A5",
+    "button_pressed_text": "#000000",
+    "button_open": "#DCDCDC",
+    "accent": "#90D1FF",
+    "accent_text": "#00537D",
+    "link": "#009BFF",
+    "warning": "#FF6400",
+    "error": "#FF0000",
+    "success": "#2E7D32",
+    "found": "#A85F00",
+    "failure": "#C62828",
+    "chart_rest": "#9A9A9A"
+  },
+  "chart": ["#4E79A7", "#F28E2B", "#E15759", "#76B7B2", "#59A14F", "#EDC948", "#B07AA1", "#FF9DA7", "#9C755F", "#5FA2CE"]
+}

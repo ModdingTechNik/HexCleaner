@@ -8,6 +8,7 @@ mod disk_tab;
 mod progress;
 mod schedule_tab;
 mod settings_tab;
+mod theme;
 mod trash_tab;
 mod update_ui;
 mod widgets;
@@ -17,7 +18,7 @@ use eframe::egui;
 use hexcleaner::cli::{self, ExitCode};
 use hexcleaner::settings::Settings;
 use hexcleaner::system::explorer_menu;
-use hexcleaner::{i18n, schedule, system, t};
+use hexcleaner::{i18n, schedule, system, t, themes};
 
 /// Имя программы в справке.
 const EXE_NAME: &str = "HexCleaner";
@@ -36,8 +37,9 @@ fn main() -> eframe::Result {
     let is_admin = system::admin::is_elevated();
     let settings = Settings::load();
 
-    // Встроенные переводы выкладываем в папку языков как образцы для своих.
+    // Встроенные переводы и темы выкладываем в их папки как образцы для своих.
     i18n::export_built_in_languages();
+    themes::export_built_in_themes();
     let language_error = i18n::select_language(settings.language.as_deref());
 
     let mut viewport = egui::ViewportBuilder::default()
